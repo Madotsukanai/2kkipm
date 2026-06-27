@@ -17,8 +17,8 @@ const WIKI_URL: &str = "https://wikiwiki.jp/yumenikki-g3/";
 const WIKI_UPDATES_URL: &str =
     "https://wikiwiki.jp/yumenikki-g3/FrontPage/\
      %E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7";
-const STATE_FILE: &str = "y2k-pm/state.json";
-const CONFIG_FILE: &str = "y2k-pm/config.json";
+const STATE_FILE: &str = "2kkipm/state.json";
+const CONFIG_FILE: &str = "2kkipm/config.json";
 const USER_AGENT: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
      (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
@@ -32,8 +32,8 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Parser)]
 #[clap(
-    name = "y2k",
-    about = "ゆめ2っき パッケージマネージャー",
+    name = "2kkipm",
+    about = "ゆめ2っき パッケージマネージャー (非公式)",
     version = "0.1.0"
 )]
 struct Cli {
@@ -623,7 +623,7 @@ fn getuploader_download(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBu
             .and_then(|u| u.path_segments()?.last().map(|s| s.to_string()))
     });
 
-    let dest = resolve_dest(hint_dest, fname.as_deref(), "y2k-patch.zip");
+    let dest = resolve_dest(hint_dest, fname.as_deref(), "2kki-patch.zip");
     stream_to_file(res3, &dest)?;
 
     Ok(dest)
@@ -815,7 +815,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
 
     if !content_type.contains("text/html") {
         let fname = filename_from_response(&res);
-        let dest  = resolve_dest(hint_dest, fname.as_deref(), "y2k-download.bin");
+        let dest  = resolve_dest(hint_dest, fname.as_deref(), "2kki-download.bin");
         eprintln!("  {} 直接ダウンロード開始", "✓".green());
         stream_to_file(res, &dest)?;
         return Ok(dest);
@@ -893,7 +893,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
     if let Some(ref f) = fname {
         eprintln!("  {} ファイル名: {}", "→".cyan(), f.yellow());
     }
-    let dest = resolve_dest(hint_dest, fname.as_deref(), "y2k-download.bin");
+    let dest = resolve_dest(hint_dest, fname.as_deref(), "2kki-download.bin");
     stream_to_file(res2, &dest)?;
     Ok(dest)
 }
@@ -1808,8 +1808,8 @@ fn cmd_update(count: Option<usize>) -> Result<()> {
     let display_count = count.unwrap_or_else(|| default_display_count(&state.entries));
     print_entries(&state.entries, display_count);
     println!();
-    println!("  {}", "y2k upgrade            最新バージョンを確認".dimmed());
-    println!("  {}", "y2k install core       本体をインストール".dimmed());
+    println!("  {}", "2kkipm upgrade            最新バージョンを確認".dimmed());
+    println!("  {}", "2kkipm install core       本体をインストール".dimmed());
     Ok(())
 }
 
@@ -1817,7 +1817,7 @@ fn cmd_upgrade(download: bool) -> Result<()> {
     let mut state = load_state();
     let mut config = load_config();
     if state.entries.is_empty() {
-        println!("{}", "更新情報がありません。先に `y2k update` を実行してください。".yellow());
+        println!("{}", "更新情報がありません。先に `2kkipm update` を実行してください。".yellow());
         return Ok(());
     }
 
@@ -1923,11 +1923,11 @@ fn cmd_upgrade(download: bool) -> Result<()> {
         );
     } else {
         println!("{}", "coreがインストールされていません。".dimmed());
-        println!("  インストール: {}", "y2k install core".cyan());
+        println!("  インストール: {}", "2kkipm install core".cyan());
     }
 
     if !download && latest_installed_ver.is_none() {
-        println!("\n  {}", "DLリンク表示: y2k upgrade --download".dimmed());
+        println!("\n  {}", "DLリンク表示: 2kkipm upgrade --download".dimmed());
     }
     Ok(())
 }
@@ -1940,20 +1940,20 @@ fn download_patch_only(
         .context("パッチのDLリンクが見つかりません。Wikiを直接確認してください。")?;
 
     let tmp_path = std::env::temp_dir()
-        .join(format!("y2k-patch-{}.bin", entry.label));
+        .join(format!("2kkipm-patch-{}.bin", entry.label));
 
     if let Ok(mut target) = cleanup_target.lock() {
         *target = CleanupTarget::DownloadTmpFile(tmp_path.clone());
     }
 
     let hint_dir = std::env::temp_dir();
-    let hint_filename = format!("y2k-patch-{}", entry.label);
+    let hint_filename = format!("2kkipm-patch-{}", entry.label);
     let hint_path = hint_dir.join(&hint_filename);
 
     let exts = [".bin", ".zip", ".7z", ".tar.gz", ".tar.xz", ".tar.bz2"];
     let cached = exts.iter().find_map(|ext| {
         let p = std::env::temp_dir()
-            .join(format!("y2k-patch-{}{}", entry.label, ext));
+            .join(format!("2kkipm-patch-{}{}", entry.label, ext));
         if p.exists() && fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 10 * 1024 {
             Some(p)
         } else {
@@ -1968,8 +1968,8 @@ fn download_patch_only(
             let fname = e.file_name().to_string_lossy().to_string();
             let fname_lower = fname.to_lowercase();
             let is_archive = exts.iter().any(|ext| fname_lower.ends_with(ext));
-            let is_y2k_related = fname_lower.contains("yume")
-                || fname_lower.contains("y2k")
+            let is_2kkipm_related = fname_lower.contains("yume")
+                || fname_lower.contains("2kkipm")
                 || fname_lower.contains("patch")
                 || fname_lower.contains("パッチ")
                 || fname_lower.contains("update");
@@ -1980,7 +1980,7 @@ fn download_patch_only(
                 || fname_lower.contains(&format!("patch_{}", ver_num))
                 || fname_lower.contains(&format!("p{}", ver_num));
 
-            if is_archive && has_ver && is_y2k_related && !is_core
+            if is_archive && has_ver && is_2kkipm_related && !is_core
                 && fs::metadata(e.path()).map(|m| m.len()).unwrap_or(0) > 10 * 1024
             {
                 Some(e.path())
@@ -2195,7 +2195,7 @@ fn cmd_install_core_version(
     println!();
 
     let tmp_path = std::env::temp_dir()
-        .join(format!("y2k-core-{}.bin", entry.label));
+        .join(format!("2kki-core-{}.bin", entry.label));
 
     let cleanup_target: Arc<Mutex<CleanupTarget>> =
         Arc::new(Mutex::new(CleanupTarget::DownloadTmpFile(tmp_path.clone())));
@@ -2222,7 +2222,7 @@ fn cmd_install_core_version(
     let exts = [".bin", ".zip", ".7z", ".tar.gz", ".tar.xz", ".tar.bz2"];
     let cached = exts.iter().find_map(|ext| {
         let p = std::env::temp_dir()
-            .join(format!("y2k-core-{}{}", entry.label, ext));
+            .join(format!("2kki-core-{}{}", entry.label, ext));
         if p.exists() && fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 1024 * 1024 {
             Some(p)
         } else {
@@ -2264,7 +2264,7 @@ fn cmd_install_core_version(
                 let tmp_dir = std::env::temp_dir();
                 println!("  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
                 println!("     (ファイル名はそのまま、拡張子は .zip .7z なども可)");
-                println!("  3. 再度 `y2k install core` を実行する");
+                println!("  3. 再度 `2kkipm install core` を実行する");
                 return Ok(());
             }
             Ok(actual_path) => {
@@ -2455,7 +2455,7 @@ fn cmd_install_patch(state: &mut State, config: &mut Config) -> Result<()> {
     };
 
     let active_core = state.active_core.clone()
-        .context("アクティブな core がありません。先に `y2k install core` で本体をインストールしてください。")?;
+        .context("アクティブな core がありません。先に `2kkipm install core` で本体をインストールしてください。")?;
 
     sync_package_list_if_empty(state)?;
 
@@ -2471,7 +2471,7 @@ fn cmd_install_patch(state: &mut State, config: &mut Config) -> Result<()> {
     println!();
 
     let tmp_path = std::env::temp_dir()
-        .join(format!("y2k-patch-{}.bin", entry.label));
+        .join(format!("2kkipm-patch-{}.bin", entry.label));
 
     let cleanup_target: Arc<Mutex<CleanupTarget>> =
         Arc::new(Mutex::new(CleanupTarget::DownloadTmpFile(tmp_path.clone())));
@@ -2594,7 +2594,7 @@ fn cmd_list() -> Result<()> {
 fn cmd_show(count: Option<usize>) -> Result<()> {
     let state = load_state();
     if state.entries.is_empty() {
-        println!("{}", "更新情報がありません。先に `y2k update` を実行してください。".yellow());
+        println!("{}", "更新情報がありません。先に `2kkipm update` を実行してください。".yellow());
         return Ok(());
     }
     if let Some(fetched) = &state.last_fetched {
@@ -2625,7 +2625,7 @@ fn cmd_config(install_dir: Option<String>) -> Result<()> {
             config.install_dir.as_deref().unwrap_or("(未設定)").yellow());
         println!("  設定ファイル: {}",
             config_path().display().to_string().dimmed());
-        println!("\n  設定変更: {}", "y2k config --install-dir <パス>".cyan());
+        println!("\n  設定変更: {}", "2kkipm config --install-dir <パス>".cyan());
     }
     Ok(())
 }
@@ -2671,7 +2671,7 @@ mod tests {
     use super::*;
 
     fn make_temp_test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("y2k-test-{}-{}", name, std::process::id()));
+        let dir = std::env::temp_dir().join(format!("2kkipm-test-{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -2693,7 +2693,7 @@ mod tests {
 
     #[test]
     fn test_list_top_level_entries_nonexistent_dir() {
-        let dir = std::env::temp_dir().join("y2k-test-does-not-exist-xyz");
+        let dir = std::env::temp_dir().join("2kkipm-test-does-not-exist-xyz");
         let _ = fs::remove_dir_all(&dir);
         assert!(list_top_level_entries(&dir).is_empty());
     }
