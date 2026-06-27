@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use colored::*;
-use dirs::{config_dir, data_dir};
+use dirs::{config_dir, data_local_dir};
 use encoding_rs::SHIFT_JIS;
 use indicatif::{ProgressBar, ProgressStyle};
 use regex::Regex;
@@ -25,6 +25,27 @@ const USER_AGENT: &str =
 
 /// ユーザーがCtrl+Cを押したかグローバルに追跡するフラグ
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+fn safe_temp_dir() -> PathBuf {
+    let t = std::env::temp_dir();
+    #[cfg(windows)]
+    {
+        if let Ok(p) = t.canonicalize() {
+            let s = p.to_string_lossy();
+            if s.starts_with(r"\\?\") {
+                PathBuf::from(&s[4..])
+            } else {
+                p
+            }
+        } else {
+            t
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        t
+    }
+}
 
 // ============================================================
 // CLI
@@ -73,6 +94,11 @@ enum Commands {
     },
     /// 状態ファイルをリセットする
     Clean,
+    /// インストール済みのバージョンを削除する
+    Remove {
+        /// 削除するバージョン (例: ver0.129b)
+        version: String,
+    },
 }
 
 // ============================================================
@@ -204,7 +230,7 @@ struct State {
 }
 
 fn state_path() -> PathBuf {
-    data_dir()
+    data_local_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(STATE_FILE)
 }
@@ -269,6 +295,7 @@ static_re!(attr_value_re, r#"(?i)value=["']([^"']*)["']"#);
 
 fn strip_tags(html: &str) -> String {
     let text = tag_re().replace_all(html, "");
+    let text = decode_basic_entities(&text);
     let text = entity_re().replace_all(&text, " ");
     spaces_re().replace_all(&text, " ").trim().to_string()
 }
@@ -391,7 +418,7 @@ fn parse_entry(html_line: &str) -> Option<UpdateEntry> {
     })
 }
 
-fn fetch_updates() -> Result<Vec<UpdateEntry>> {
+fn fetch_updates(include_archives: bool) -> Result<Vec<UpdateEntry>> {
     eprint!("{}", "  Wikiを取得中...".dimmed());
 
     let response = ureq::get(WIKI_UPDATES_URL)
@@ -456,78 +483,78 @@ fn fetch_updates() -> Result<Vec<UpdateEntry>> {
         }
     }
 
-    // メインページから過去ログのリンクを抽出する
-    // 例: href="/yumenikki-g3/FrontPage/%E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7/%E9%81%8E%E5%8E%BB%E3%83%AD%E3%82%B02015"
-    let archive_re = Regex::new(
-        r#"href="/yumenikki-g3/FrontPage/%E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7/%E9%81%8E%E5%8E%BB%E3%83%AD%E3%82%B0(\d{4})""#
-    ).unwrap();
+    if include_archives {
+        // メインページから過去ログのリンクを抽出する
+        let archive_re = Regex::new(
+            r#"href="/yumenikki-g3/FrontPage/%E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7/%E9%81%8E%E5%8E%BB%E3%83%AD%E3%82%B0(\d{4})""#
+        ).unwrap();
 
-    let mut archive_years = Vec::new();
-    for cap in archive_re.captures_iter(&html) {
-        if let Ok(year) = cap[1].parse::<u32>() {
-            archive_years.push(year);
+        let mut archive_years = Vec::new();
+        for cap in archive_re.captures_iter(&html) {
+            if let Ok(year) = cap[1].parse::<u32>() {
+                archive_years.push(year);
+            }
         }
-    }
-    archive_years.sort_by(|a, b| b.cmp(a)); // 新しい年（2025, 2024...）の順に処理する
-    archive_years.dedup();
+        archive_years.sort_by(|a, b| b.cmp(a));
+        archive_years.dedup();
 
-    for year in archive_years {
-        let archive_url = format!(
-            "https://wikiwiki.jp/yumenikki-g3/FrontPage/%E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7/%E9%81%8E%E5%8E%BB%E3%83%AD%E3%82%B0{}",
-            year
-        );
-        eprint!("{}", format!("  過去ログ{}を取得中...", year).dimmed());
-        
-        let res = ureq::get(&archive_url)
-            .set("User-Agent", USER_AGENT)
-            .timeout(std::time::Duration::from_secs(30))
-            .call();
+        for year in archive_years {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            let archive_url = format!(
+                "https://wikiwiki.jp/yumenikki-g3/FrontPage/%E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7/%E9%81%8E%E5%8E%BB%E3%83%AD%E3%82%B0{}",
+                year
+            );
+            eprint!("{}", format!("  過去ログ{}を取得中...", year).dimmed());
+            
+            let res = ureq::get(&archive_url)
+                .set("User-Agent", USER_AGENT)
+                .timeout(std::time::Duration::from_secs(30))
+                .call();
 
-        let html_archive = match res {
-            Ok(r) => {
-                eprintln!(" {}", "完了".green());
-                r.into_string().unwrap_or_default()
-            }
-            Err(e) => {
-                eprintln!(" {}", format!("失敗 (スキップ): {}", e).yellow());
-                continue;
-            }
-        };
-
-        let mut archive_pending_note: Option<String> = None;
-        for html_line in html_archive.lines() {
-            let text = strip_tags(html_line);
-            if text.is_empty() {
-                continue;
-            }
-            if text.starts_with('※') {
-                archive_pending_note = Some(text);
-                continue;
-            }
-            if !text.starts_with(|c: char| c.is_ascii_digit()) {
-                continue;
-            }
-            if let Some(mut entry) = parse_entry(html_line) {
-                let key = (entry.date.clone(), entry.label.clone());
-                if seen.contains(&key) {
+            let html_archive = match res {
+                Ok(r) => {
+                    eprintln!(" {}", "完了".green());
+                    r.into_string().unwrap_or_default()
+                }
+                Err(e) => {
+                    eprintln!(" {}", format!("失敗 (スキップ): {}", e).yellow());
                     continue;
                 }
-                seen.insert(key);
-                if let Some(p_note) = archive_pending_note.take() {
-                    if let Some(ref mut n) = entry.note {
-                        *n = format!("{} / {}", p_note, n);
-                    } else {
-                        entry.note = Some(p_note);
-                    }
+            };
+
+            let mut archive_pending_note: Option<String> = None;
+            for html_line in html_archive.lines() {
+                let text = strip_tags(html_line);
+                if text.is_empty() {
+                    continue;
                 }
-                entries.push(entry);
+                if text.starts_with('※') {
+                    archive_pending_note = Some(text);
+                    continue;
+                }
+                if !text.starts_with(|c: char| c.is_ascii_digit()) {
+                    continue;
+                }
+                if let Some(mut entry) = parse_entry(html_line) {
+                    let key = (entry.date.clone(), entry.label.clone());
+                    if seen.contains(&key) {
+                        continue;
+                    }
+                    seen.insert(key);
+                    if let Some(p_note) = archive_pending_note.take() {
+                        if let Some(ref mut n) = entry.note {
+                            *n = format!("{} / {}", p_note, n);
+                        } else {
+                            entry.note = Some(p_note);
+                        }
+                    }
+                    entries.push(entry);
+                }
             }
         }
     }
 
-    // 日付の降順（新しい日付が先）で Stable Sort を行う。
     entries.sort_by(|a, b| b.date.cmp(&a.date));
-
     Ok(entries)
 }
 
@@ -931,7 +958,7 @@ fn resolve_dest(hint_dest: Option<&PathBuf>, fname: Option<&str>, fallback: &str
         }
         return p.clone();
     }
-    std::env::temp_dir().join(name)
+    safe_temp_dir().join(name)
 }
 
 fn stream_to_file(response: ureq::Response, dest: &PathBuf) -> Result<()> {
@@ -1130,12 +1157,18 @@ fn try_promote_version(state: &mut State, install_dir: &PathBuf, old_ver: &str, 
     let new_dir = install_dir.join(format!("ゆめ2っきver{}", new_num));
 
     if old_dir.exists() && old_dir.is_dir() {
+        if new_dir.exists() {
+            let _ = fs::remove_dir_all(&new_dir);
+        }
         eprintln!("  {} ディレクトリをリネーム中: {} -> {}", "→".cyan(), old_dir.display(), new_dir.display());
         fs::rename(&old_dir, &new_dir)?;
     } else {
         let old_dir_alt = install_dir.join(format!("ゆめ2っき{}", old_num));
         let new_dir_alt = install_dir.join(format!("ゆめ2っき{}", new_num));
         if old_dir_alt.exists() && old_dir_alt.is_dir() {
+            if new_dir_alt.exists() {
+                let _ = fs::remove_dir_all(&new_dir_alt);
+            }
             eprintln!("  {} ディレクトリをリネーム中: {} -> {}", "→".cyan(), old_dir_alt.display(), new_dir_alt.display());
             fs::rename(&old_dir_alt, &new_dir_alt)?;
         }
@@ -1190,6 +1223,53 @@ fn is_version_older(a: &str, b: &str) -> bool {
         return a_min < b_min;
     }
     a_alp < b_alp
+}
+
+fn copy_save_and_assets(src_dir: &std::path::Path, dest_dir: &std::path::Path) -> Result<()> {
+    if !src_dir.exists() || !dest_dir.exists() {
+        return Ok(());
+    }
+
+    println!("セーブデータとアセットを引き継いでいます...");
+    println!("  コピー元: {}", src_dir.display());
+    println!("  コピー先: {}", dest_dir.display());
+
+    // 1. Save*.lsd のコピー
+    if let Ok(entries) = fs::read_dir(src_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    let lower = filename.to_lowercase();
+                    if lower.starts_with("save") && lower.ends_with(".lsd") {
+                        let dest_file = dest_dir.join(filename);
+                        if let Err(e) = fs::copy(&path, &dest_file) {
+                            eprintln!("  {} セーブデータ {} のコピーに失敗しました: {}", "✗".red(), filename, e);
+                        } else {
+                            println!("  {} セーブデータを引き継ぎました: {}", "✓".green(), filename);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. pc_back.png のコピー
+    let pc_back_names = ["pc_back.png", "pc_back.PNG", "PC_BACK.PNG", "PC_BACK.png"];
+    for name in pc_back_names {
+        let src_file = src_dir.join(name);
+        if src_file.exists() && src_file.is_file() {
+            let dest_file = dest_dir.join(name);
+            if let Err(e) = fs::copy(&src_file, &dest_file) {
+                eprintln!("  {} {} のコピーに失敗しました: {}", "✗".red(), name, e);
+            } else {
+                println!("  {} {} を引き継ぎました", "✓".green(), name);
+            }
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn extract_bundled_patch_number(entry: &UpdateEntry) -> Option<u32> {
@@ -1537,8 +1617,60 @@ fn extract_zip_preferring_external(archive_path: &PathBuf, dest_dir: &PathBuf) -
         }
     }
 
+    // Windows: システム標準の tar.exe または PowerShell Expand-Archive
+    if cfg!(target_os = "windows") {
+        // 方法1: tar (Windows 10 17063以降標準搭載)
+        if command_exists("tar", "--help") {
+            let before = list_top_level_entries(dest_dir);
+            let args = vec![
+                "-xf".to_string(),
+                archive_path.to_string_lossy().to_string(),
+                "-C".to_string(),
+                dest_dir.to_string_lossy().to_string(),
+            ];
+            let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+            match run_external("tar", &args_ref) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if e.to_string().contains("__interrupted__") || INTERRUPTED.load(Ordering::SeqCst) {
+                        return Err(e);
+                    }
+                    eprintln!(
+                        "  {} tar での展開に失敗しました。次の手段を試します。\n    {}",
+                        "!".yellow().bold(), e
+                    );
+                    remove_new_top_level_entries(dest_dir, &before);
+                }
+            }
+        }
+
+        // 方法2: PowerShell Expand-Archive
+        if command_exists("powershell", "-Command Get-Variable") {
+            let before = list_top_level_entries(dest_dir);
+            let cmd_str = format!(
+                "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+                archive_path.to_string_lossy().replace("'", "''"),
+                dest_dir.to_string_lossy().replace("'", "''")
+            );
+            let args = vec!["-Command", &cmd_str];
+            match run_external("powershell", &args) {
+                Ok(()) => return Ok(()),
+                Err(e) => {
+                    if e.to_string().contains("__interrupted__") || INTERRUPTED.load(Ordering::SeqCst) {
+                        return Err(e);
+                    }
+                    eprintln!(
+                        "  {} PowerShell での展開に失敗しました。内蔵の展開処理にフォールバックします。\n    {}",
+                        "!".yellow().bold(), e
+                    );
+                    remove_new_top_level_entries(dest_dir, &before);
+                }
+            }
+        }
+    }
+
     // Linux: unzip -O SHIFT-JIS を使う
-    // Windows / その他: -O フラグなしで unzip を試し、ダメなら内蔵フォールバック
+    // その他: -O フラグなしで unzip を試し、ダメなら内蔵フォールバック
     let build_args = if cfg!(target_os = "linux") {
         |archive_path: &PathBuf, dest_dir: &PathBuf| {
             vec![
@@ -1779,7 +1911,7 @@ fn cmd_update(count: Option<usize>) -> Result<()> {
     println!("{}", "ゆめ2っき パッケージマネージャー".cyan().bold());
     println!("{}", "パッケージリストを更新しています...".dimmed());
 
-    let entries = fetch_updates()?;
+    let entries = fetch_updates(false)?;
     let total   = entries.len();
     let mut state = load_state();
 
@@ -1808,7 +1940,7 @@ fn cmd_update(count: Option<usize>) -> Result<()> {
     let display_count = count.unwrap_or_else(|| default_display_count(&state.entries));
     print_entries(&state.entries, display_count);
     println!();
-    println!("  {}", "2kkipm upgrade            最新バージョンを確認".dimmed());
+    println!("  {}", "2kkipm upgrade            最新バージョンにアップデート".dimmed());
     println!("  {}", "2kkipm install core       本体をインストール".dimmed());
     Ok(())
 }
@@ -1821,11 +1953,25 @@ fn cmd_upgrade(download: bool) -> Result<()> {
         return Ok(());
     }
 
+    let install_dir = if let Some(dir) = &config.install_dir {
+        PathBuf::from(dir)
+    } else {
+        std::env::current_dir()?
+    };
+
     let latest_installed_ver = if state.installed_versions.is_empty() {
         None
     } else {
         let mut keys: Vec<&String> = state.installed_versions.keys().collect();
-        keys.sort_by(|a, b| b.cmp(a));
+        keys.sort_by(|a, b| {
+            if is_version_older(a, b) {
+                std::cmp::Ordering::Greater
+            } else if is_version_older(b, a) {
+                std::cmp::Ordering::Less
+            } else {
+                std::cmp::Ordering::Equal
+            }
+        });
         Some(keys[0].clone())
     };
 
@@ -1895,7 +2041,23 @@ fn cmd_upgrade(download: bool) -> Result<()> {
                 println!("{} core: {} → {} にアップデート可能です",
                     "!".yellow().bold(), installed.dimmed(), core_entry.label.green().bold());
                 println!("アップデートを実行します...\n");
-                return cmd_install_core_version(&mut state, &mut config, None);
+                
+                let old_core_num = installed.trim_start_matches("ver");
+                let old_dir = install_dir.join(format!("ゆめ2っきver{}/ゆめ2っき", old_core_num));
+
+                cmd_install_core_version(&mut state, &mut config, None)?;
+
+                let updated_state = load_state();
+                if let Some(new_active) = &updated_state.active_core {
+                    if new_active != installed {
+                        let new_core_num = new_active.trim_start_matches("ver");
+                        let new_dir = install_dir.join(format!("ゆめ2っきver{}/ゆめ2っき", new_core_num));
+                        if let Err(e) = copy_save_and_assets(&old_dir, &new_dir) {
+                            eprintln!("警告: 引き継ぎ処理中にエラーが発生しました: {}", e);
+                        }
+                    }
+                }
+                return Ok(());
             }
         }
 
@@ -1939,20 +2101,20 @@ fn download_patch_only(
     let raw_url = entry.dl_url.as_deref()
         .context("パッチのDLリンクが見つかりません。Wikiを直接確認してください。")?;
 
-    let tmp_path = std::env::temp_dir()
+    let tmp_path = safe_temp_dir()
         .join(format!("2kkipm-patch-{}.bin", entry.label));
 
     if let Ok(mut target) = cleanup_target.lock() {
         *target = CleanupTarget::DownloadTmpFile(tmp_path.clone());
     }
 
-    let hint_dir = std::env::temp_dir();
+    let hint_dir = safe_temp_dir();
     let hint_filename = format!("2kkipm-patch-{}", entry.label);
     let hint_path = hint_dir.join(&hint_filename);
 
     let exts = [".bin", ".zip", ".7z", ".tar.gz", ".tar.xz", ".tar.bz2"];
     let cached = exts.iter().find_map(|ext| {
-        let p = std::env::temp_dir()
+        let p = safe_temp_dir()
             .join(format!("2kkipm-patch-{}{}", entry.label, ext));
         if p.exists() && fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 10 * 1024 {
             Some(p)
@@ -1962,7 +2124,7 @@ fn download_patch_only(
     }).or_else(|| {
         let ver     = &entry.label;
         let ver_num = ver.trim_start_matches("パッチ");
-        let tmp_dir = std::env::temp_dir();
+        let tmp_dir = safe_temp_dir();
         fs::read_dir(&tmp_dir).ok()?.find_map(|e| {
             let e       = e.ok()?;
             let fname = e.file_name().to_string_lossy().to_string();
@@ -2007,7 +2169,7 @@ fn download_patch_only(
                 println!("\n{}", "手動ダウンロード手順:".yellow().bold());
                 println!("  1. ブラウザで以下のURLを開く:");
                 println!("       {}", raw_url.cyan().bold());
-                let tmp_dir = std::env::temp_dir();
+                let tmp_dir = safe_temp_dir();
                 println!("  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
                 println!("  3. 再度インストーラーを実行する");
                 bail!("パッチの自動ダウンロード失敗: {}", e);
@@ -2081,7 +2243,7 @@ fn apply_patch_internal(
 fn sync_package_list_if_empty(state: &mut State) -> Result<()> {
     if state.entries.is_empty() {
         println!("{}", "パッケージリストが空です。自動で update を実行します...".yellow());
-        let entries = fetch_updates()?;
+        let entries = fetch_updates(false)?;
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         state.entries = entries;
         state.last_fetched = Some(now.clone());
@@ -2175,10 +2337,25 @@ fn cmd_install_core_version(
 
     let entry = if let Some(target) = target_version {
         let normalized_target = target.trim_start_matches("ver");
-        state.entries.iter()
-            .find(|e| e.kind == EntryKind::Core && (e.label == normalized_target || e.label == format!("ver{}", normalized_target) || e.label.contains(normalized_target)))
-            .context(format!("指定されたバージョン {} の core エントリが見つかりません。", target))?
-            .clone()
+        let found = state.entries.iter()
+            .find(|e| e.kind == EntryKind::Core && (e.label == normalized_target || e.label == format!("ver{}", normalized_target) || e.label.contains(normalized_target)));
+        
+        if let Some(e) = found {
+            e.clone()
+        } else {
+            println!("{}", format!("指定されたバージョン {} は最新の履歴にありません。過去ログを取得して再検索します...", target).yellow());
+            
+            let entries = fetch_updates(true)?;
+            let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+            state.entries = entries;
+            state.last_fetched = Some(now);
+            save_state(state)?;
+            
+            state.entries.iter()
+                .find(|e| e.kind == EntryKind::Core && (e.label == normalized_target || e.label == format!("ver{}", normalized_target) || e.label.contains(normalized_target)))
+                .context(format!("過去ログをスキャンしましたが、指定されたバージョン {} の core エントリが見つかりませんでした。", target))?
+                .clone()
+        }
     } else {
         state.entries.iter()
             .find(|e| e.kind == EntryKind::Core)
@@ -2194,7 +2371,7 @@ fn cmd_install_core_version(
     println!("  展開先     : {}", install_dir.display().to_string().cyan());
     println!();
 
-    let tmp_path = std::env::temp_dir()
+    let tmp_path = safe_temp_dir()
         .join(format!("2kki-core-{}.bin", entry.label));
 
     let cleanup_target: Arc<Mutex<CleanupTarget>> =
@@ -2221,7 +2398,7 @@ fn cmd_install_core_version(
 
     let exts = [".bin", ".zip", ".7z", ".tar.gz", ".tar.xz", ".tar.bz2"];
     let cached = exts.iter().find_map(|ext| {
-        let p = std::env::temp_dir()
+        let p = safe_temp_dir()
             .join(format!("2kki-core-{}{}", entry.label, ext));
         if p.exists() && fs::metadata(&p).map(|m| m.len()).unwrap_or(0) > 1024 * 1024 {
             Some(p)
@@ -2230,7 +2407,7 @@ fn cmd_install_core_version(
         }
     }).or_else(|| {
         let ver     = &entry.label;
-        let tmp_dir = std::env::temp_dir();
+        let tmp_dir = safe_temp_dir();
         fs::read_dir(&tmp_dir).ok()?.find_map(|e| {
             let e       = e.ok()?;
             let fname = e.file_name().to_string_lossy().to_string();
@@ -2261,7 +2438,7 @@ fn cmd_install_core_version(
                 println!("\n{}", "手動ダウンロード手順:".yellow().bold());
                 println!("  1. ブラウザで以下のURLを開く:");
                 println!("       {}", raw_url.cyan().bold());
-                let tmp_dir = std::env::temp_dir();
+                let tmp_dir = safe_temp_dir();
                 println!("  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
                 println!("     (ファイル名はそのまま、拡張子は .zip .7z なども可)");
                 println!("  3. 再度 `2kkipm install core` を実行する");
@@ -2470,7 +2647,7 @@ fn cmd_install_patch(state: &mut State, config: &mut Config) -> Result<()> {
     println!("  展開先     : {}", install_dir.display().to_string().cyan());
     println!();
 
-    let tmp_path = std::env::temp_dir()
+    let tmp_path = safe_temp_dir()
         .join(format!("2kkipm-patch-{}.bin", entry.label));
 
     let cleanup_target: Arc<Mutex<CleanupTarget>> =
@@ -2482,21 +2659,7 @@ fn cmd_install_patch(state: &mut State, config: &mut Config) -> Result<()> {
         INTERRUPTED.store(true, Ordering::SeqCst);
         if let Ok(pid_guard) = child_pid_store().lock() {
             if let Some(pid) = *pid_guard {
-                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM); }
-                let mut killed = false;
-                for _ in 0..10 {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    unsafe {
-                        if libc::kill(pid as libc::pid_t, 0) != 0 {
-                            killed = true;
-                            break;
-                        }
-                    }
-                }
-                if !killed {
-                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL); }
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                }
+                terminate_child_process(pid);
             }
         }
         if let Ok(target) = cleanup_target_for_handler.lock() {
@@ -2641,6 +2804,55 @@ fn cmd_clean() -> Result<()> {
     Ok(())
 }
 
+fn cmd_remove(version: &str) -> Result<()> {
+    let mut state = load_state();
+    let config = load_config();
+
+    if !state.installed_versions.contains_key(version) {
+        bail!("指定されたバージョン {} はインストールされていません。", version.yellow());
+    }
+
+    if state.active_core.as_deref() == Some(version) {
+        bail!(
+            "現在アクティブなバージョン {} は削除できません。\n\
+             先に別のバージョンをインストールするか、アクティブなバージョンを切り替えてください。",
+            version.yellow()
+        );
+    }
+
+    let install_dir = if let Some(dir) = &config.install_dir {
+        PathBuf::from(dir)
+    } else {
+        std::env::current_dir()?
+    };
+
+    let core_num = version.trim_start_matches("ver");
+    let dir_name = format!("ゆめ2っきver{}", core_num);
+    let target_dir = install_dir.join(&dir_name);
+
+    println!("バージョン {} を削除しています...", version.cyan().bold());
+    if target_dir.exists() && target_dir.is_dir() {
+        println!("  {} ディレクトリを削除中: {}", "→".cyan(), target_dir.display());
+        fs::remove_dir_all(&target_dir)
+            .with_context(|| format!("ディレクトリの削除に失敗しました: {}", target_dir.display()))?;
+    } else {
+        println!("  {} ディレクトリは存在しませんでした: {}", "※".yellow(), target_dir.display());
+    }
+
+    state.installed_versions.remove(version);
+
+    if state.installed_core.as_deref() == Some(version) {
+        state.installed_core = None;
+    }
+    state.install_history.retain(|v| v != version);
+
+    save_state(&state)?;
+
+    println!("{} バージョン {} を正常に削除しました。", "✓".green().bold(), version.green());
+
+    Ok(())
+}
+
 // ============================================================
 // main
 // ============================================================
@@ -2655,6 +2867,7 @@ fn main() {
         Commands::Show    { count }       => cmd_show(*count),
         Commands::Config  { install_dir } => cmd_config(install_dir.clone()),
         Commands::Clean                   => cmd_clean(),
+        Commands::Remove  { version }     => cmd_remove(version),
     };
     if let Err(e) = result {
         eprintln!("{} {}", "エラー:".red().bold(), e);
@@ -2671,7 +2884,7 @@ mod tests {
     use super::*;
 
     fn make_temp_test_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("2kkipm-test-{}-{}", name, std::process::id()));
+        let dir = safe_temp_dir().join(format!("2kkipm-test-{}-{}", name, std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -2693,7 +2906,7 @@ mod tests {
 
     #[test]
     fn test_list_top_level_entries_nonexistent_dir() {
-        let dir = std::env::temp_dir().join("2kkipm-test-does-not-exist-xyz");
+        let dir = safe_temp_dir().join("2kkipm-test-does-not-exist-xyz");
         let _ = fs::remove_dir_all(&dir);
         assert!(list_top_level_entries(&dir).is_empty());
     }
