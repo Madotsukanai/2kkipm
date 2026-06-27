@@ -70,10 +70,15 @@ enum Commands {
         #[clap(short, long)]
         count: Option<usize>,
     },
-    /// 最新バージョン情報を表示する
+    /// 最新バージョン情報を表示・アップデートする
     Upgrade {
+        /// DLリンクのみを表示する
         #[clap(short, long)]
         download: bool,
+
+        /// パッケージマネージャー本体のみをアップデートする
+        #[clap(short = 's', long = "self")]
+        self_update: bool,
     },
     /// coreまたはpatchをインストールする
     Install {
@@ -1904,6 +1909,204 @@ fn print_entries(entries: &[UpdateEntry], count: usize) {
 }
 
 // ============================================================
+// ツール自体のアップデート確認
+// ============================================================
+
+fn is_semver_older(current: &str, latest: &str) -> bool {
+    let parse = |s: &str| -> Vec<u32> {
+        s.split('.')
+            .map(|x| x.parse::<u32>().unwrap_or(0))
+            .collect()
+    };
+    let c_parts = parse(current);
+    let l_parts = parse(latest);
+    for i in 0..c_parts.len().max(l_parts.len()) {
+        let c_val = c_parts.get(i).cloned().unwrap_or(0);
+        let l_val = l_parts.get(i).cloned().unwrap_or(0);
+        if c_val != l_val {
+            return c_val < l_val;
+        }
+    }
+    false
+}
+
+struct SelfUpdateInfo {
+    tag_name: String,
+    download_url: Option<String>,
+}
+
+fn select_asset(assets: &[GithubAsset]) -> Option<String> {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    for asset in assets {
+        let name = asset.name.to_lowercase();
+        let os_match = match os {
+            "windows" => name.contains("windows") || name.contains("win") || name.ends_with(".exe"),
+            "linux" => name.contains("linux"),
+            "macos" => name.contains("macos") || name.contains("darwin") || name.contains("osx"),
+            _ => false,
+        };
+        let arch_match = match arch {
+            "x86_64" => name.contains("x86_64") || name.contains("amd64") || name.contains("64"),
+            "aarch64" => name.contains("aarch64") || name.contains("arm64"),
+            _ => true,
+        };
+        if os_match && arch_match {
+            return Some(asset.browser_download_url.clone());
+        }
+    }
+
+    for asset in assets {
+        let name = asset.name.to_lowercase();
+        let os_match = match os {
+            "windows" => name.contains("windows") || name.contains("win") || name.ends_with(".exe"),
+            "linux" => name.contains("linux"),
+            "macos" => name.contains("macos") || name.contains("darwin") || name.contains("osx"),
+            _ => false,
+        };
+        if os_match {
+            return Some(asset.browser_download_url.clone());
+        }
+    }
+
+    None
+}
+
+fn find_binary_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+                    let name_lower = filename.to_lowercase();
+                    if name_lower == "2kkipm" || name_lower == "2kkipm.exe" {
+                        return Some(path);
+                    }
+                }
+            } else if path.is_dir() {
+                if let Some(p) = find_binary_in_dir(&path) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
+}
+
+fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
+    println!("{}", "2kkipm パッケージマネージャーをアップデートしています...".cyan().bold());
+    println!("  最新バージョン: {}", tag_name.green().bold());
+
+    let current_exe = std::env::current_exe()?;
+    let tmp_dir = safe_temp_dir().join(format!("2kkipm-self-update-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&tmp_dir);
+    fs::create_dir_all(&tmp_dir)?;
+
+    println!("  {} 最新バイナリをダウンロード中...", "→".cyan());
+    let hint_path = tmp_dir.join("downloaded_asset");
+    let downloaded_file = download_file(download_url, Some(&hint_path))?;
+
+    let is_archive = {
+        let name = downloaded_file.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+        name.ends_with(".zip") || name.ends_with(".7z") || name.ends_with(".tar.gz") || name.ends_with(".tgz")
+    };
+
+    let bin_path = if is_archive {
+        println!("  {} アーカイブを展開中...", "→".cyan());
+        let extract_dest = tmp_dir.join("extracted");
+        fs::create_dir_all(&extract_dest)?;
+        extract_archive(&downloaded_file, &extract_dest)?;
+        if let Some(bin) = find_binary_in_dir(&extract_dest) {
+            bin
+        } else {
+            bail!("展開されたアーカイブ内に `2kkipm` 実行バイナリが見つかりませんでした。");
+        }
+    } else {
+        downloaded_file
+    };
+
+    println!("  {} バイナリを置き換え中...", "→".cyan());
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(metadata) = fs::metadata(&bin_path) {
+            let mut perms = metadata.permissions();
+            perms.set_mode(0o755);
+            let _ = fs::set_permissions(&bin_path, perms);
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let old_exe = current_exe.with_extension("exe.old");
+        if old_exe.exists() {
+            let _ = fs::remove_file(&old_exe);
+        }
+        fs::rename(&current_exe, &old_exe)
+            .context("実行中のバイナリのリネームに失敗しました。")?;
+        
+        if let Err(_) = fs::rename(&bin_path, &current_exe) {
+            fs::copy(&bin_path, &current_exe)?;
+            let _ = fs::remove_file(&bin_path);
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        if let Err(_) = fs::rename(&bin_path, &current_exe) {
+            fs::copy(&bin_path, &current_exe)?;
+            let _ = fs::remove_file(&bin_path);
+        }
+    }
+
+    let _ = fs::remove_dir_all(&tmp_dir);
+
+    println!("{} 2kkipm のアップデートが完了しました！", "✓".green().bold());
+    println!("  バージョン: {} → {}", env!("CARGO_PKG_VERSION").dimmed(), tag_name.green().bold());
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct GithubAsset {
+    name: String,
+    browser_download_url: String,
+}
+
+fn check_self_update() -> Result<Option<SelfUpdateInfo>> {
+    let url = "https://api.github.com/repos/Madotsukanai/2kkipm/releases/latest";
+    let response = ureq::get(url)
+        .set("User-Agent", USER_AGENT)
+        .timeout(std::time::Duration::from_secs(10))
+        .call();
+
+    let r = match response {
+        Ok(res) => res,
+        Err(_) => return Ok(None),
+    };
+
+    #[derive(Deserialize)]
+    struct GithubRelease {
+        tag_name: String,
+        assets: Vec<GithubAsset>,
+    }
+
+    if let Ok(release) = serde_json::from_reader::<_, GithubRelease>(r.into_reader()) {
+        let current_version = env!("CARGO_PKG_VERSION");
+        let latest_version = release.tag_name.trim_start_matches('v');
+        if is_semver_older(current_version, latest_version) {
+            let download_url = select_asset(&release.assets);
+            return Ok(Some(SelfUpdateInfo {
+                tag_name: release.tag_name,
+                download_url,
+            }));
+        }
+    }
+
+    Ok(None)
+}
+
+// ============================================================
 // コマンド実装
 // ============================================================
 
@@ -1942,10 +2145,54 @@ fn cmd_update(count: Option<usize>) -> Result<()> {
     println!();
     println!("  {}", "2kkipm upgrade            最新バージョンにアップデート".dimmed());
     println!("  {}", "2kkipm install core       本体をインストール".dimmed());
+
+    match check_self_update() {
+        Ok(Some(info)) => {
+            println!();
+            println!(
+                "{} 2kkipm の新しいリリース ({}) が利用可能です！\n\
+                 ダウンロードはこちら: {}",
+                "★".yellow().bold(),
+                info.tag_name.yellow().bold(),
+                "https://github.com/Madotsukanai/2kkipm/releases".cyan().bold()
+            );
+        }
+        _ => {}
+    }
+
     Ok(())
 }
 
-fn cmd_upgrade(download: bool) -> Result<()> {
+fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
+    match check_self_update() {
+        Ok(Some(info)) => {
+            if self_update {
+                if let Some(url) = &info.download_url {
+                    perform_self_update(url, &info.tag_name)?;
+                } else {
+                    println!("{} 2kkipm の最新リリース ({}) が公開されていますが、現在のOSに対応するバイナリアセットが見つかりませんでした。\n手動でダウンロードしてください: https://github.com/Madotsukanai/2kkipm/releases", "!".yellow().bold(), info.tag_name);
+                }
+                return Ok(());
+            }
+
+            println!("{} 2kkipm パッケージマネージャーの新しいバージョン ({}) が利用可能です。", "●".cyan().bold(), info.tag_name.green().bold());
+            if let Some(url) = &info.download_url {
+                if let Err(e) = perform_self_update(url, &info.tag_name) {
+                    eprintln!("警告: 2kkipm の自己アップデート中にエラーが発生しました: {}", e);
+                } else {
+                    println!("パッケージマネージャー本体を更新したため、再度コマンドを実行してください。\n");
+                    return Ok(());
+                }
+            }
+        }
+        _ => {
+            if self_update {
+                println!("{} 2kkipm パッケージマネージャーはすでに最新バージョン ({}) です。", "✓".green().bold(), env!("CARGO_PKG_VERSION").yellow());
+                return Ok(());
+            }
+        }
+    }
+
     let mut state = load_state();
     let mut config = load_config();
     if state.entries.is_empty() {
@@ -2861,7 +3108,7 @@ fn main() {
     let cli = Cli::parse();
     let result = match &cli.command {
         Commands::Update  { count }       => cmd_update(*count),
-        Commands::Upgrade { download }    => cmd_upgrade(*download),
+        Commands::Upgrade { download, self_update } => cmd_upgrade(*download, *self_update),
         Commands::Install { kind }        => cmd_install(kind),
         Commands::List                    => cmd_list(),
         Commands::Show    { count }       => cmd_show(*count),
@@ -3131,5 +3378,16 @@ mod tests {
         let key = ("2026/06/24".to_string(), "パッチ11".to_string());
         assert!(seen.insert(key.clone()));
         assert!(!seen.insert(key));
+    }
+
+    #[test]
+    fn test_is_semver_older() {
+        assert!(is_semver_older("0.1.0", "0.2.0"));
+        assert!(is_semver_older("0.1.0", "0.1.1"));
+        assert!(is_semver_older("1.0.0", "2.0.0"));
+        assert!(!is_semver_older("0.2.0", "0.1.0"));
+        assert!(!is_semver_older("0.1.0", "0.1.0"));
+        assert!(is_semver_older("0.1.0", "0.1.0.1"));
+        assert!(!is_semver_older("0.1.0.1", "0.1.0"));
     }
 }
