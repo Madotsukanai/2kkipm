@@ -1,0 +1,14 @@
+/home/madotsukanai/Projects/2kkipm/target/debug/deps/thiserror-513901ae47e20004.d: /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/madotsukanai/Projects/2kkipm/target/debug/build/thiserror-8d78ec9e0024ce57/out/private.rs
+
+/home/madotsukanai/Projects/2kkipm/target/debug/deps/libthiserror-513901ae47e20004.rlib: /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/madotsukanai/Projects/2kkipm/target/debug/build/thiserror-8d78ec9e0024ce57/out/private.rs
+
+/home/madotsukanai/Projects/2kkipm/target/debug/deps/libthiserror-513901ae47e20004.rmeta: /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/madotsukanai/Projects/2kkipm/target/debug/build/thiserror-8d78ec9e0024ce57/out/private.rs
+
+/home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/home/madotsukanai/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/home/madotsukanai/Projects/2kkipm/target/debug/build/thiserror-8d78ec9e0024ce57/out/private.rs:
+
+# env-dep:OUT_DIR=/home/madotsukanai/Projects/2kkipm/target/debug/build/thiserror-8d78ec9e0024ce57/out
