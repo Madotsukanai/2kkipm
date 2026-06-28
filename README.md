@@ -1,4 +1,5 @@
 # 2kkipm
+![2kkipm](https://github-production-user-asset-6210df.s3.amazonaws.com/220693558/614248302-3d84729b-af18-484d-9b71-8485a27d72a2.png)
 ゆめ2っき用非公式パッケージマネージャーです。 / An unofficial package manager for Yume 2kki.
 
 releaseのバイナリはWindows版とLinux版しかありませんが、macOS等でもビルドすれば使えると思います。 / Release binaries are only provided for Windows and Linux, but it should work on macOS and others if built from source.
