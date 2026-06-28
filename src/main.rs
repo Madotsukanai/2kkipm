@@ -106,7 +106,7 @@ fn safe_temp_dir() -> PathBuf {
 #[clap(
     name = "2kkipm",
     about = "ゆめ2っき パッケージマネージャー (非公式) / Yume2kki Package Manager (Unofficial)",
-    version = "0.1.3"
+    version = "0.1.4"
 )]
 struct Cli {
     #[clap(subcommand)]
