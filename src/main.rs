@@ -55,7 +55,7 @@ fn safe_temp_dir() -> PathBuf {
 #[clap(
     name = "2kkipm",
     about = "ゆめ2っき パッケージマネージャー (非公式)",
-    version = "0.1.1"
+    version = "0.1.3"
 )]
 struct Cli {
     #[clap(subcommand)]
@@ -2125,18 +2125,65 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
         if old_exe.exists() {
             let _ = fs::remove_file(&old_exe);
         }
-        fs::rename(&current_exe, &old_exe)
-            .context("実行中のバイナリのリネームに失敗しました。")?;
-        
-        if let Err(_) = fs::rename(&bin_path, &current_exe) {
-            fs::copy(&bin_path, &current_exe)?;
-            let _ = fs::remove_file(&bin_path);
+        if let Err(e) = fs::rename(&current_exe, &old_exe) {
+            if e.kind() == std::io::ErrorKind::PermissionDenied {
+                println!("  {} 権限が不足しています。管理者権限を要求します...", "!".yellow());
+                let script = format!("Move-Item -Path '{}' -Destination '{}' -Force; Copy-Item -Path '{}' -Destination '{}' -Force", current_exe.display(), old_exe.display(), bin_path.display(), current_exe.display());
+                let status = std::process::Command::new("powershell")
+                    .arg("-NoProfile")
+                    .arg("-ExecutionPolicy")
+                    .arg("Bypass")
+                    .arg("-Command")
+                    .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"{}\"' -Verb RunAs -Wait", script))
+                    .status()?;
+                if !status.success() {
+                    bail!("管理者権限でのバイナリの置き換えに失敗しました。");
+                }
+            } else {
+                bail!("実行中のバイナリのリネームに失敗しました: {}", e);
+            }
+        } else {
+            if let Err(e) = fs::rename(&bin_path, &current_exe) {
+                if let Err(e2) = fs::copy(&bin_path, &current_exe) {
+                    if e2.kind() == std::io::ErrorKind::PermissionDenied {
+                        println!("  {} 権限が不足しています。管理者権限を要求します...", "!".yellow());
+                        let script = format!("Copy-Item -Path '{}' -Destination '{}' -Force", bin_path.display(), current_exe.display());
+                        let status = std::process::Command::new("powershell")
+                            .arg("-NoProfile")
+                            .arg("-ExecutionPolicy")
+                            .arg("Bypass")
+                            .arg("-Command")
+                            .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"{}\"' -Verb RunAs -Wait", script))
+                            .status()?;
+                        if !status.success() {
+                            bail!("管理者権限でのバイナリの置き換えに失敗しました。");
+                        }
+                    } else {
+                        bail!("バイナリのコピーに失敗しました: {}", e2);
+                    }
+                }
+                let _ = fs::remove_file(&bin_path);
+            }
         }
     }
     #[cfg(not(windows))]
     {
         if let Err(_) = fs::rename(&bin_path, &current_exe) {
-            fs::copy(&bin_path, &current_exe)?;
+            if let Err(e) = fs::copy(&bin_path, &current_exe) {
+                if e.kind() == std::io::ErrorKind::PermissionDenied {
+                    println!("  {} 権限が不足しています。sudoを使用して置き換えを試みます...", "!".yellow());
+                    let status = std::process::Command::new("sudo")
+                        .arg("cp")
+                        .arg(&bin_path)
+                        .arg(&current_exe)
+                        .status()?;
+                    if !status.success() {
+                        bail!("sudoによるバイナリの置き換えに失敗しました。");
+                    }
+                } else {
+                    bail!("バイナリのコピーに失敗しました: {}", e);
+                }
+            }
             let _ = fs::remove_file(&bin_path);
         }
     }
