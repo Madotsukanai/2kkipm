@@ -13,6 +13,57 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+macro_rules! t_fmt {
+    ($en:expr, $ja:expr $(, $arg:expr)*) => {
+        if &*rust_i18n::locale() == "ja" {
+            format!($ja $(, $arg)*)
+        } else {
+            format!($en $(, $arg)*)
+        }
+    }
+}
+
+macro_rules! t_println {
+    ($en:expr, $ja:expr $(, $arg:expr)*) => {
+        if &*rust_i18n::locale() == "ja" {
+            println!($ja $(, $arg)*)
+        } else {
+            println!($en $(, $arg)*)
+        }
+    }
+}
+
+macro_rules! t_eprint {
+    ($en:expr, $ja:expr $(, $arg:expr)*) => {
+        if &*rust_i18n::locale() == "ja" {
+            eprint!($ja $(, $arg)*)
+        } else {
+            eprint!($en $(, $arg)*)
+        }
+    }
+}
+
+macro_rules! t_eprintln {
+    ($en:expr, $ja:expr $(, $arg:expr)*) => {
+        if &*rust_i18n::locale() == "ja" {
+            eprintln!($ja $(, $arg)*)
+        } else {
+            eprintln!($en $(, $arg)*)
+        }
+    }
+}
+
+macro_rules! t_bail {
+    ($en:expr, $ja:expr $(, $arg:expr)*) => {
+        if &*rust_i18n::locale() == "ja" {
+            anyhow::bail!($ja $(, $arg)*)
+        } else {
+            anyhow::bail!($en $(, $arg)*)
+        }
+    }
+}
+rust_i18n::i18n!("locales", fallback = "ja");
+
 const WIKI_URL: &str = "https://wikiwiki.jp/yumenikki-g3/";
 const WIKI_UPDATES_URL: &str =
     "https://wikiwiki.jp/yumenikki-g3/FrontPage/\
@@ -54,7 +105,7 @@ fn safe_temp_dir() -> PathBuf {
 #[derive(Parser)]
 #[clap(
     name = "2kkipm",
-    about = "ゆめ2っき パッケージマネージャー (非公式)",
+    about = "ゆめ2っき パッケージマネージャー (非公式) / Yume2kki Package Manager (Unofficial)",
     version = "0.1.3"
 )]
 struct Cli {
@@ -156,7 +207,7 @@ fn prompt_install_dir(config: &mut Config) -> Result<PathBuf> {
         let input = line.trim().to_string();
 
         if input.is_empty() {
-            eprintln!("{} パスが空です。", "✗".red().bold());
+            t_eprintln!("{} Path is empty.", "{} パスが空です。", "✗".red().bold());
             continue;
         }
 
@@ -164,8 +215,7 @@ fn prompt_install_dir(config: &mut Config) -> Result<PathBuf> {
         let expanded = expanded.canonicalize().unwrap_or(expanded);
         config.install_dir = Some(expanded.to_string_lossy().to_string());
         save_config(config)?;
-        println!(
-            "{} install_dir を設定しました: {}",
+        t_println!("{} Set install_dir: {}", "{} install_dir を設定しました: {}",
             "✓".green().bold(),
             expanded.display().to_string().yellow()
         );
@@ -424,7 +474,7 @@ fn parse_entry(html_line: &str) -> Option<UpdateEntry> {
 }
 
 fn fetch_updates(include_archives: bool) -> Result<Vec<UpdateEntry>> {
-    eprint!("{}", "  Wikiを取得中...".dimmed());
+    eprint!("{}", rust_i18n::t!("fetching_wiki").dimmed());
 
     let response = ureq::get(WIKI_UPDATES_URL)
         .set("User-Agent", USER_AGENT)
@@ -443,15 +493,15 @@ fn fetch_updates(include_archives: bool) -> Result<Vec<UpdateEntry>> {
         }
         Err(ureq::Error::Transport(t)) => {
             eprintln!();
-            bail!("Wiki への接続に失敗しました。\n原因: {}", t);
+            t_bail!("Failed to connect to Wiki.\nReason: {}", "Wiki への接続に失敗しました。\n原因: {}", t);
         }
     };
 
     let status = response.status();
     if status != 200 {
-        eprintln!(" {}", format!("警告: HTTP {}", status).yellow());
+        eprintln!(" {}", t_fmt!("Warning: HTTP {}", "警告: HTTP {}", status).yellow());
     } else {
-        eprintln!(" {}", "完了".green());
+        eprintln!(" {}", rust_i18n::t!("done").green());
     }
 
     let html = response.into_string()?;
@@ -509,7 +559,7 @@ fn fetch_updates(include_archives: bool) -> Result<Vec<UpdateEntry>> {
                 "https://wikiwiki.jp/yumenikki-g3/FrontPage/%E6%9C%80%E8%BF%91%E3%81%AE%E4%BA%88%E5%AE%9A%E3%83%BB%E6%9B%B4%E6%96%B0%E4%B8%80%E8%A6%A7/%E9%81%8E%E5%8E%BB%E3%83%AD%E3%82%B0{}",
                 year
             );
-            eprint!("{}", format!("  過去ログ{}を取得中...", year).dimmed());
+            eprint!("{}", rust_i18n::t!("fetching_past_log", year = year).dimmed());
             
             let res = ureq::get(&archive_url)
                 .set("User-Agent", USER_AGENT)
@@ -518,11 +568,11 @@ fn fetch_updates(include_archives: bool) -> Result<Vec<UpdateEntry>> {
 
             let html_archive = match res {
                 Ok(r) => {
-                    eprintln!(" {}", "完了".green());
+                    eprintln!(" {}", rust_i18n::t!("done").green());
                     r.into_string().unwrap_or_default()
                 }
                 Err(e) => {
-                    eprintln!(" {}", format!("失敗 (スキップ): {}", e).yellow());
+                    eprintln!(" {}", t_fmt!("Failed (Skipped): {}", "失敗 (スキップ): {}", e).yellow());
                     continue;
                 }
             };
@@ -582,17 +632,6 @@ fn default_display_count(entries: &[UpdateEntry]) -> usize {
 // Helper: x-www-form-urlencoded 構築
 // ============================================================
 
-fn form_urlencode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(b as char),
-            b' ' => out.push('+'),
-            _ => out.push_str(&format!("%{:02X}", b)),
-        }
-    }
-    out
-}
 
 // ============================================================
 // getuploader ダウンロード
@@ -600,7 +639,7 @@ fn form_urlencode(s: &str) -> String {
 
 fn getuploader_download(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf> {
     let agent = ureq::AgentBuilder::new().redirects(0).build(); // リダイレクトを追わない
-    eprintln!("  {} getuploader ページを解析中...", "→".cyan());
+    t_eprintln!("  {} Parsing getuploader page...", "  {} getuploader ページを解析中...", "→".cyan());
 
     // 1. GETリクエスト
     let res = agent.get(url).set("User-Agent", USER_AGENT).call()?;
@@ -619,11 +658,11 @@ fn getuploader_download(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBu
     }
 
     if token.is_empty() {
-        bail!("トークンが見つかりませんでした。サイト構造が変わった可能性があります。");
+        t_bail!("Token not found. The site structure might have changed.", "トークンが見つかりませんでした。サイト構造が変わった可能性があります。");
     }
 
     // 3. トークンをPOST送信
-    eprintln!("  {} トークンをPOST送信中...", "→".cyan());
+    t_eprintln!("  {} POSTing token...", "  {} トークンをPOST送信中...", "→".cyan());
     let res2 = agent.post(url)
         .set("User-Agent", USER_AGENT)
         .set("Content-Type", "application/x-www-form-urlencoded")
@@ -643,9 +682,9 @@ fn getuploader_download(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBu
         raw_dl_url = Some(cap[1].to_string());
     }
 
-    let raw_dl_url = raw_dl_url.context("実ファイルのダウンロードURLが見つかりませんでした。サイト構造が変わった可能性があります。")?;
+    let raw_dl_url = raw_dl_url.context(t_fmt!("Download URL of the actual file not found. The site structure might have changed.", "実ファイルのダウンロードURLが見つかりませんでした。サイト構造が変わった可能性があります。"))?;
     let dl_url = decode_html_entities(&raw_dl_url);
-    eprintln!("  {} 実ファイルURLを取得: {}", "✓".green(), dl_url.yellow());
+    t_eprintln!("  {} Fetched actual file URL: {}", "  {} 実ファイルURLを取得: {}", "✓".green(), dl_url.yellow());
 
     // 5. 実ファイルをダウンロード
     let fname = url::Url::parse(&dl_url).ok()
@@ -828,7 +867,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
         "https://drive.google.com/uc?export=download&id={}", file_id
     );
 
-    eprintln!("  {} Google Drive から取得中...", "→".cyan());
+    t_eprintln!("  {} Fetching from Google Drive...", "  {} Google Drive から取得中...", "→".cyan());
 
     let res = agent
         .get(&initial_url)
@@ -843,7 +882,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
             code,
             r.into_string().unwrap_or_default().chars().take(300).collect::<String>()
         ),
-        Err(e) => bail!("Google Drive への接続に失敗: {}", e),
+        Err(e) => t_bail!("Failed to connect to Google Drive: {}", "Google Drive への接続に失敗: {}", e),
     };
 
     let content_type = res.header("Content-Type").unwrap_or("").to_string();
@@ -851,7 +890,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
     if !content_type.contains("text/html") {
         let fname = filename_from_response(&res);
         let dest  = resolve_dest(hint_dest, fname.as_deref(), "2kki-download.bin");
-        eprintln!("  {} 直接ダウンロード開始", "✓".green());
+        t_eprintln!("  {} Starting direct download", "  {} 直接ダウンロード開始", "✓".green());
         stream_to_file(res, &dest)?;
         return Ok(dest);
     }
@@ -869,14 +908,14 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
     let og_fname = gdrive_filename_from_confirm_page(&html);
 
     if let Some(ref f) = og_fname {
-        eprintln!("  {} ファイル名(ページより): {}", "→".cyan(), f.yellow());
+        t_eprintln!("  {} Filename (from page): {}", "  {} ファイル名(ページより): {}", "→".cyan(), f.yellow());
     }
 
     let dl_url = if let Some(url) = build_viruscheck_url(&html, file_id) {
-        eprintln!("  {} ウイルスチェックページを通過中...", "→".cyan());
+        t_eprintln!("  {} Passing virus check page...", "  {} ウイルスチェックページを通過中...", "→".cyan());
         url
     } else if let Some(url) = get_url_from_gdrive_form(&html) {
-        eprintln!("  {} 確認ページを通過中...", "→".cyan());
+        t_eprintln!("  {} Passing confirmation page...", "  {} 確認ページを通過中...", "→".cyan());
         url
     } else {
         bail!(
@@ -901,7 +940,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
             code,
             r.into_string().unwrap_or_default().chars().take(300).collect::<String>()
         ),
-        Err(e) => bail!("ダウンロードリクエストに失敗: {}", e),
+        Err(e) => t_bail!("Download request failed: {}", "ダウンロードリクエストに失敗: {}", e),
     };
 
     let ct2 = res2.header("Content-Type").unwrap_or("").to_string();
@@ -926,7 +965,7 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
 
     let fname = filename_from_response(&res2).or(og_fname);
     if let Some(ref f) = fname {
-        eprintln!("  {} ファイル名: {}", "→".cyan(), f.yellow());
+        t_eprintln!("  {} Filename: {}", "  {} ファイル名: {}", "→".cyan(), f.yellow());
     }
     let dest = resolve_dest(hint_dest, fname.as_deref(), "2kki-download.bin");
     match download_with_external(&dl_url, &dest) {
@@ -960,7 +999,7 @@ fn download_with_external(url: &str, dest: &std::path::Path) -> Result<bool> {
     let wget_ua = format!("--user-agent={}", USER_AGENT);
 
     if command_exists("wget", "--version") {
-        println!("  {} wget を使用してダウンロード中...", "→".cyan());
+        t_println!("  {} Downloading using wget...", "  {} wget を使用してダウンロード中...", "→".cyan());
         let args: Vec<&std::ffi::OsStr> = vec![
             std::ffi::OsStr::new("-q"),
             std::ffi::OsStr::new("--show-progress"),
@@ -974,13 +1013,13 @@ fn download_with_external(url: &str, dest: &std::path::Path) -> Result<bool> {
         match run_download_command("wget", &args) {
             Ok(true) => return Ok(true),
             _ => {
-                println!("  {} wget でのダウンロードに失敗しました。フォールバックします...", "!".yellow().bold());
+                t_println!("  {} Download with wget failed. Falling back...", "  {} wget でのダウンロードに失敗しました。フォールバックします...", "!".yellow().bold());
             }
         }
     }
 
     if command_exists("curl", "--version") {
-        println!("  {} curl を使用してダウンロード中...", "→".cyan());
+        t_println!("  {} Downloading using curl...", "  {} curl を使用してダウンロード中...", "→".cyan());
         let args: Vec<&std::ffi::OsStr> = vec![
             std::ffi::OsStr::new("-L"),
             std::ffi::OsStr::new("--connect-timeout"),
@@ -994,7 +1033,7 @@ fn download_with_external(url: &str, dest: &std::path::Path) -> Result<bool> {
         match run_download_command("curl", &args) {
             Ok(true) => return Ok(true),
             _ => {
-                println!("  {} curl でのダウンロードに失敗しました。フォールバックします...", "!".yellow().bold());
+                t_println!("  {} Download with curl failed. Falling back...", "  {} curl でのダウンロードに失敗しました。フォールバックします...", "!".yellow().bold());
             }
         }
     }
@@ -1086,9 +1125,9 @@ fn stream_to_file(response: ureq::Response, dest: &PathBuf) -> Result<()> {
     let mut buf_writer = io::BufWriter::with_capacity(BUF, file);
 
     io::copy(&mut { progress_reader }, &mut buf_writer)
-        .context("ダウンロード中にエラーが発生しました")?;
+        .context(t_fmt!("An error occurred during download", "ダウンロード中にエラーが発生しました"))?;
 
-    buf_writer.flush().context("ファイルの書き込みを完了できませんでした")?;
+    buf_writer.flush().context(t_fmt!("Could not complete file writing", "ファイルの書き込みを完了できませんでした"))?;
     pb.finish_and_clear();
     Ok(())
 }
@@ -1234,7 +1273,7 @@ fn try_promote_version(state: &mut State, install_dir: &PathBuf, old_ver: &str, 
         return Ok(());
     }
 
-    println!("  {} バージョン昇格を検出: {} -> {}", "→".cyan(), old_ver.yellow(), new_ver.green());
+    t_println!("  {} Version promotion detected: {} -> {}", "  {} バージョン昇格を検出: {} -> {}", "→".cyan(), old_ver.yellow(), new_ver.green());
 
     let old_num = old_ver.trim_start_matches("ver");
     let new_num = new_ver.trim_start_matches("ver");
@@ -1246,7 +1285,7 @@ fn try_promote_version(state: &mut State, install_dir: &PathBuf, old_ver: &str, 
         if new_dir.exists() {
             let _ = fs::remove_dir_all(&new_dir);
         }
-        eprintln!("  {} ディレクトリをリネーム中: {} -> {}", "→".cyan(), old_dir.display(), new_dir.display());
+        t_eprintln!("  {} Renaming directory: {} -> {}", "  {} ディレクトリをリネーム中: {} -> {}", "→".cyan(), old_dir.display(), new_dir.display());
         fs::rename(&old_dir, &new_dir)?;
     } else {
         let old_dir_alt = install_dir.join(format!("ゆめ2っき{}", old_num));
@@ -1255,7 +1294,7 @@ fn try_promote_version(state: &mut State, install_dir: &PathBuf, old_ver: &str, 
             if new_dir_alt.exists() {
                 let _ = fs::remove_dir_all(&new_dir_alt);
             }
-            eprintln!("  {} ディレクトリをリネーム中: {} -> {}", "→".cyan(), old_dir_alt.display(), new_dir_alt.display());
+            t_eprintln!("  {} Renaming directory: {} -> {}", "  {} ディレクトリをリネーム中: {} -> {}", "→".cyan(), old_dir_alt.display(), new_dir_alt.display());
             fs::rename(&old_dir_alt, &new_dir_alt)?;
         }
     }
@@ -1316,9 +1355,9 @@ fn copy_save_and_assets(src_dir: &std::path::Path, dest_dir: &std::path::Path) -
         return Ok(());
     }
 
-    println!("セーブデータとアセットを引き継いでいます...");
-    println!("  コピー元: {}", src_dir.display());
-    println!("  コピー先: {}", dest_dir.display());
+    println!("{}", rust_i18n::t!("migrating_saves"));
+    t_println!("  Source: {}", "  コピー元: {}", src_dir.display());
+    t_println!("  Destination: {}", "  コピー先: {}", dest_dir.display());
 
     // 1. Save*.lsd のコピー
     if let Ok(entries) = fs::read_dir(src_dir) {
@@ -1330,9 +1369,9 @@ fn copy_save_and_assets(src_dir: &std::path::Path, dest_dir: &std::path::Path) -
                     if lower.starts_with("save") && lower.ends_with(".lsd") {
                         let dest_file = dest_dir.join(filename);
                         if let Err(e) = fs::copy(&path, &dest_file) {
-                            eprintln!("  {} セーブデータ {} のコピーに失敗しました: {}", "✗".red(), filename, e);
+                            t_eprintln!("  {} Failed to copy save data {}: {}", "  {} セーブデータ {} のコピーに失敗しました: {}", "✗".red(), filename, e);
                         } else {
-                            println!("  {} セーブデータを引き継ぎました: {}", "✓".green(), filename);
+                            t_println!("  {} Inherited save data: {}", "  {} セーブデータを引き継ぎました: {}", "✓".green(), filename);
                         }
                     }
                 }
@@ -1347,9 +1386,9 @@ fn copy_save_and_assets(src_dir: &std::path::Path, dest_dir: &std::path::Path) -
         if src_file.exists() && src_file.is_file() {
             let dest_file = dest_dir.join(name);
             if let Err(e) = fs::copy(&src_file, &dest_file) {
-                eprintln!("  {} {} のコピーに失敗しました: {}", "✗".red(), name, e);
+                t_eprintln!("  {} Failed to copy {}: {}", "  {} {} のコピーに失敗しました: {}", "✗".red(), name, e);
             } else {
-                println!("  {} {} を引き継ぎました", "✓".green(), name);
+                t_println!("  {} Inherited {}", "  {} {} を引き継ぎました", "✓".green(), name);
             }
             break;
         }
@@ -1421,8 +1460,8 @@ fn normalize_patch_extracted_dir(install_dir: &PathBuf, core_dir: &PathBuf) -> R
 
         if is_game_folder {
             let real_root = find_patch_real_root(&subdir);
-            eprintln!("  {} 検出された真のパッチルート: {}", "→".cyan(), real_root.display());
-            eprintln!("  {} 展開されたパッチ階層を {} に適用中...", "→".cyan(), core_dir.display());
+            t_eprintln!("  {} Detected true patch root: {}", "  {} 検出された真のパッチルート: {}", "→".cyan(), real_root.display());
+            t_eprintln!("  {} Applying extracted patch hierarchy to {}...", "  {} 展開されたパッチ階層を {} に適用中...", "→".cyan(), core_dir.display());
             
             let inner_rd = fs::read_dir(&real_root)?;
             let mut has_inner_yume2kki = false;
@@ -1457,7 +1496,7 @@ fn normalize_patch_extracted_dir(install_dir: &PathBuf, core_dir: &PathBuf) -> R
                         }
                         merge_directories(&entry_path, &dst_path)?;
                     } else {
-                        println!("  {} コピー中: {}", "→".cyan(), dst_path.display());
+                        t_println!("  {} Copying: {}", "  {} コピー中: {}", "→".cyan(), dst_path.display());
                         fs::copy(&entry_path, &dst_path)?;
                     }
                 }
@@ -1489,7 +1528,7 @@ fn merge_directories(src: &PathBuf, dst: &PathBuf) -> Result<()> {
             if let Some(parent) = dst_path.parent() {
                 fs::create_dir_all(parent)?;
             }
-            println!("  {} コピー中: {}", "→".cyan(), dst_path.display());
+            t_println!("  {} Copying: {}", "  {} コピー中: {}", "→".cyan(), dst_path.display());
             fs::copy(&src_path, &dst_path)?;
         }
     }
@@ -1505,19 +1544,19 @@ fn extract_archive(archive_path: &PathBuf, dest_dir: &PathBuf) -> Result<()> {
     };
 
     let result = if magic.starts_with(&[0x37, 0x7A, 0xBC, 0xAF, 0x27, 0x1C]) {
-        eprintln!("  {} 形式を検出: 7z", "→".cyan());
+        t_eprintln!("  {} Detected format: 7z", "  {} 形式を検出: 7z", "→".cyan());
         extract_7z_preferring_external(archive_path, dest_dir)
     } else if magic.starts_with(&[0x50, 0x4B, 0x03, 0x04]) {
-        eprintln!("  {} 形式を検出: zip", "→".cyan());
+        t_eprintln!("  {} Detected format: zip", "  {} 形式を検出: zip", "→".cyan());
         extract_zip_preferring_external(archive_path, dest_dir)
     } else if magic.starts_with(&[0x1F, 0x8B]) {
-        eprintln!("  {} 形式を検出: tar.gz", "→".cyan());
+        t_eprintln!("  {} Detected format: tar.gz", "  {} 形式を検出: tar.gz", "→".cyan());
         extract_tar_gz_preferring_external(archive_path, dest_dir)
     } else if magic.starts_with(&[0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00]) {
-        eprintln!("  {} 形式を検出: tar.xz", "→".cyan());
+        t_eprintln!("  {} Detected format: tar.xz", "  {} 形式を検出: tar.xz", "→".cyan());
         extract_tar_xz_preferring_external(archive_path, dest_dir)
     } else if magic.starts_with(&[0x42, 0x5A, 0x68]) {
-        eprintln!("  {} 形式を検出: tar.bz2", "→".cyan());
+        t_eprintln!("  {} Detected format: tar.bz2", "  {} 形式を検出: tar.bz2", "→".cyan());
         extract_tar_bz2_preferring_external(archive_path, dest_dir)
     } else {
         let name = archive_path.file_name().unwrap_or_default()
@@ -1982,9 +2021,8 @@ fn print_entries(entries: &[UpdateEntry], count: usize) {
         }
     }
     if entries.len() > count {
-        println!(
-            "\n  {}",
-            format!("… 他{}件  (--count N で表示数変更)", entries.len() - count).dimmed()
+        t_println!("\n  {}", "\n  {}",
+            rust_i18n::t!("other_entries", count = entries.len() - count).dimmed()
         );
     }
 }
@@ -2077,14 +2115,14 @@ fn find_binary_in_dir(dir: &std::path::Path) -> Option<PathBuf> {
 
 fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
     println!("{}", "2kkipm パッケージマネージャーをアップデートしています...".cyan().bold());
-    println!("  最新バージョン: {}", tag_name.green().bold());
+    t_println!("  Latest version: {}", "  最新バージョン: {}", tag_name.green().bold());
 
     let current_exe = std::env::current_exe()?;
     let tmp_dir = safe_temp_dir().join(format!("2kkipm-self-update-{}", std::process::id()));
     let _ = fs::remove_dir_all(&tmp_dir);
     fs::create_dir_all(&tmp_dir)?;
 
-    println!("  {} 最新バイナリをダウンロード中...", "→".cyan());
+    t_println!("  {} Downloading latest binary...", "  {} 最新バイナリをダウンロード中...", "→".cyan());
     let hint_path = tmp_dir.join("downloaded_asset");
     let downloaded_file = download_file(download_url, Some(&hint_path))?;
 
@@ -2094,20 +2132,20 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
     };
 
     let bin_path = if is_archive {
-        println!("  {} アーカイブを展開中...", "→".cyan());
+        t_println!("  {} Extracting archive...", "  {} アーカイブを展開中...", "→".cyan());
         let extract_dest = tmp_dir.join("extracted");
         fs::create_dir_all(&extract_dest)?;
         extract_archive(&downloaded_file, &extract_dest)?;
         if let Some(bin) = find_binary_in_dir(&extract_dest) {
             bin
         } else {
-            bail!("展開されたアーカイブ内に `2kkipm` 実行バイナリが見つかりませんでした。");
+            t_bail!("`2kkipm` executable not found in extracted archive.", "展開されたアーカイブ内に `2kkipm` 実行バイナリが見つかりませんでした。");
         }
     } else {
         downloaded_file
     };
 
-    println!("  {} バイナリを置き換え中...", "→".cyan());
+    t_println!("  {} Replacing binary...", "  {} バイナリを置き換え中...", "→".cyan());
     
     #[cfg(unix)]
     {
@@ -2127,7 +2165,7 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
         }
         if let Err(e) = fs::rename(&current_exe, &old_exe) {
             if e.kind() == std::io::ErrorKind::PermissionDenied {
-                println!("  {} 権限が不足しています。管理者権限を要求します...", "!".yellow());
+                t_println!("  {} Insufficient permissions. Requesting administrator privileges...", "  {} 権限が不足しています。管理者権限を要求します...", "!".yellow());
                 let script = format!("Move-Item -Path '{}' -Destination '{}' -Force; Copy-Item -Path '{}' -Destination '{}' -Force", current_exe.display(), old_exe.display(), bin_path.display(), current_exe.display());
                 let status = std::process::Command::new("powershell")
                     .arg("-NoProfile")
@@ -2137,16 +2175,16 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
                     .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"{}\"' -Verb RunAs -Wait", script))
                     .status()?;
                 if !status.success() {
-                    bail!("管理者権限でのバイナリの置き換えに失敗しました。");
+                    t_bail!("Failed to replace binary with administrator privileges.", "管理者権限でのバイナリの置き換えに失敗しました。");
                 }
             } else {
-                bail!("実行中のバイナリのリネームに失敗しました: {}", e);
+                t_bail!("Failed to rename running binary: {}", "実行中のバイナリのリネームに失敗しました: {}", e);
             }
         } else {
             if let Err(e) = fs::rename(&bin_path, &current_exe) {
                 if let Err(e2) = fs::copy(&bin_path, &current_exe) {
                     if e2.kind() == std::io::ErrorKind::PermissionDenied {
-                        println!("  {} 権限が不足しています。管理者権限を要求します...", "!".yellow());
+                        t_println!("  {} Insufficient permissions. Requesting administrator privileges...", "  {} 権限が不足しています。管理者権限を要求します...", "!".yellow());
                         let script = format!("Copy-Item -Path '{}' -Destination '{}' -Force", bin_path.display(), current_exe.display());
                         let status = std::process::Command::new("powershell")
                             .arg("-NoProfile")
@@ -2156,10 +2194,10 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
                             .arg(&format!("Start-Process powershell -ArgumentList '-NoProfile -ExecutionPolicy Bypass -Command \"{}\"' -Verb RunAs -Wait", script))
                             .status()?;
                         if !status.success() {
-                            bail!("管理者権限でのバイナリの置き換えに失敗しました。");
+                            t_bail!("Failed to replace binary with administrator privileges.", "管理者権限でのバイナリの置き換えに失敗しました。");
                         }
                     } else {
-                        bail!("バイナリのコピーに失敗しました: {}", e2);
+                        t_bail!("Failed to copy binary: {}", "バイナリのコピーに失敗しました: {}", e2);
                     }
                 }
                 let _ = fs::remove_file(&bin_path);
@@ -2171,17 +2209,17 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
         if let Err(_) = fs::rename(&bin_path, &current_exe) {
             if let Err(e) = fs::copy(&bin_path, &current_exe) {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
-                    println!("  {} 権限が不足しています。sudoを使用して置き換えを試みます...", "!".yellow());
+                    t_println!("  {} Insufficient permissions. Attempting replacement using sudo...", "  {} 権限が不足しています。sudoを使用して置き換えを試みます...", "!".yellow());
                     let status = std::process::Command::new("sudo")
                         .arg("cp")
                         .arg(&bin_path)
                         .arg(&current_exe)
                         .status()?;
                     if !status.success() {
-                        bail!("sudoによるバイナリの置き換えに失敗しました。");
+                        t_bail!("Failed to replace binary using sudo.", "sudoによるバイナリの置き換えに失敗しました。");
                     }
                 } else {
-                    bail!("バイナリのコピーに失敗しました: {}", e);
+                    t_bail!("Failed to copy binary: {}", "バイナリのコピーに失敗しました: {}", e);
                 }
             }
             let _ = fs::remove_file(&bin_path);
@@ -2190,8 +2228,8 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
 
     let _ = fs::remove_dir_all(&tmp_dir);
 
-    println!("{} 2kkipm のアップデートが完了しました！", "✓".green().bold());
-    println!("  バージョン: {} → {}", env!("CARGO_PKG_VERSION").dimmed(), tag_name.green().bold());
+    t_println!("{} 2kkipm update completed!", "{} 2kkipm のアップデートが完了しました！", "✓".green().bold());
+    t_println!("  Version: {} -> {}", "  バージョン: {} → {}", env!("CARGO_PKG_VERSION").dimmed(), tag_name.green().bold());
     Ok(())
 }
 
@@ -2239,8 +2277,8 @@ fn check_self_update() -> Result<Option<SelfUpdateInfo>> {
 // ============================================================
 
 fn cmd_update(count: Option<usize>) -> Result<()> {
-    println!("{}", "ゆめ2っき パッケージマネージャー".cyan().bold());
-    println!("{}", "パッケージリストを更新しています...".dimmed());
+    println!("{}", rust_i18n::t!("app_title").cyan().bold());
+    println!("{}", &rust_i18n::t!("updating_package_list").dimmed());
 
     let entries = fetch_updates(false)?;
     let total   = entries.len();
@@ -2251,9 +2289,9 @@ fn cmd_update(count: Option<usize>) -> Result<()> {
             .iter()
             .filter(|e| !state.entries.iter().any(|o| o.date == e.date && o.label == e.label))
             .count();
-        format!("{} 件新着 / 前回同期: {}", cnt, prev)
+        rust_i18n::t!("new_updates_count", count = cnt, prev = prev)
     } else {
-        format!("{} 件取得", total)
+        rust_i18n::t!("total_items_fetched", count = total)
     };
 
     state.entries = entries;
@@ -2262,17 +2300,21 @@ fn cmd_update(count: Option<usize>) -> Result<()> {
     save_state(&state)?;
 
     println!(
-        "{} パッケージリストを更新しました  {} ({})",
-        "✓".green().bold(), new_count_msg.yellow(), now.dimmed()
+        "{}",
+        rust_i18n::t!(
+            "package_list_updated_count",
+            count = new_count_msg.yellow(),
+            date = now.dimmed()
+        )
     );
     println!();
-    println!("{}", "最近の更新一覧".cyan().bold());
+    println!("{}", rust_i18n::t!("recent_updates_list").cyan().bold());
     println!("{}", "─".repeat(60).dimmed());
     let display_count = count.unwrap_or_else(|| default_display_count(&state.entries));
     print_entries(&state.entries, display_count);
     println!();
-    println!("  {}", "2kkipm upgrade            最新バージョンにアップデート".dimmed());
-    println!("  {}", "2kkipm install core       本体をインストール".dimmed());
+    println!("  2kkipm upgrade            {}", rust_i18n::t!("upgrade_desc").dimmed());
+    println!("  2kkipm install core       {}", rust_i18n::t!("install_core_desc").dimmed());
 
     match check_self_update() {
         Ok(Some(info)) => {
@@ -2298,24 +2340,24 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
                 if let Some(url) = &info.download_url {
                     perform_self_update(url, &info.tag_name)?;
                 } else {
-                    println!("{} 2kkipm の最新リリース ({}) が公開されていますが、現在のOSに対応するバイナリアセットが見つかりませんでした。\n手動でダウンロードしてください: https://github.com/Madotsukanai/2kkipm/releases", "!".yellow().bold(), info.tag_name);
+                    t_println!("{} Latest 2kkipm release ({}) is available, but no binary asset for the current OS was found.\nPlease download manually: https://github.com/Madotsukanai/2kkipm/releases", "{} 2kkipm の最新リリース ({}) が公開されていますが、現在のOSに対応するバイナリアセットが見つかりませんでした。\n手動でダウンロードしてください: https://github.com/Madotsukanai/2kkipm/releases", "!".yellow().bold(), info.tag_name);
                 }
                 return Ok(());
             }
 
-            println!("{} 2kkipm パッケージマネージャーの新しいバージョン ({}) が利用可能です。", "●".cyan().bold(), info.tag_name.green().bold());
+            t_println!("{} A new version of 2kkipm package manager ({}) is available.", "{} 2kkipm パッケージマネージャーの新しいバージョン ({}) が利用可能です。", "●".cyan().bold(), info.tag_name.green().bold());
             if let Some(url) = &info.download_url {
                 if let Err(e) = perform_self_update(url, &info.tag_name) {
-                    eprintln!("警告: 2kkipm の自己アップデート中にエラーが発生しました: {}", e);
+                    t_eprintln!("Warning: Error occurred during 2kkipm self-update: {}", "警告: 2kkipm の自己アップデート中にエラーが発生しました: {}", e);
                 } else {
-                    println!("パッケージマネージャー本体を更新したため、再度コマンドを実行してください。\n");
+                    t_println!("Package manager core was updated. Please run the command again.\n", "パッケージマネージャー本体を更新したため、再度コマンドを実行してください。\n");
                     return Ok(());
                 }
             }
         }
         _ => {
             if self_update {
-                println!("{} 2kkipm パッケージマネージャーはすでに最新バージョン ({}) です。", "✓".green().bold(), env!("CARGO_PKG_VERSION").yellow());
+                t_println!("{} 2kkipm package manager is already up to date ({}).", "{} 2kkipm パッケージマネージャーはすでに最新バージョン ({}) です。", "✓".green().bold(), env!("CARGO_PKG_VERSION").yellow());
                 return Ok(());
             }
         }
@@ -2324,7 +2366,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
     let mut state = load_state();
     let mut config = load_config();
     if state.entries.is_empty() {
-        println!("{}", "更新情報がありません。先に `2kkipm update` を実行してください。".yellow());
+        println!("{}", &rust_i18n::t!("no_update_info").yellow());
         return Ok(());
     }
 
@@ -2389,7 +2431,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
             println!("{} {} {}  （{}）",
                 "●".green(), "core  ".bold(), core_ver.yellow().bold(), entry.date.dimmed());
             if !entry.authors.is_empty() {
-                println!("       担当: {}", entry.authors.join(", ").dimmed());
+                t_println!("       Author(s): {}", "       担当: {}", entry.authors.join(", ").dimmed());
             }
             if download {
                 println!("       DL:   {}", entry.dl_url.as_deref().unwrap_or(WIKI_URL).cyan());
@@ -2401,10 +2443,10 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
         println!("{} {} {}  （{}）",
             "○".blue(), "patch ".bold(), entry.label.yellow(), entry.date.dimmed());
         if !entry.authors.is_empty() {
-            println!("       担当: {}", entry.authors.join(", ").dimmed());
+            t_println!("       Author(s): {}", "       担当: {}", entry.authors.join(", ").dimmed());
         }
         if let Some(note) = &entry.note {
-            println!("       注記: {}", note.red().dimmed());
+            t_println!("       Note: {}", "       注記: {}", note.red().dimmed());
         }
         if download {
             println!("       DL:   {}", entry.dl_url.as_deref().unwrap_or(WIKI_URL).cyan());
@@ -2418,9 +2460,9 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
     if let Some(installed) = &current_installed {
         if let Some(core_entry) = &latest_core {
             if is_version_older(installed, &core_entry.label) {
-                println!("{} core: {} → {} にアップデート可能です",
+                t_println!("{} core: Can be updated {} -> {}", "{} core: {} → {} にアップデート可能です",
                     "!".yellow().bold(), installed.dimmed(), core_entry.label.green().bold());
-                println!("アップデートを実行します...\n");
+                println!("{}", &rust_i18n::t!("executing_update"));
                 
                 let old_core_num = installed.trim_start_matches("ver");
                 let old_dir = install_dir.join(format!("ゆめ2っきver{}/ゆめ2っき", old_core_num));
@@ -2433,7 +2475,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
                         let new_core_num = new_active.trim_start_matches("ver");
                         let new_dir = install_dir.join(format!("ゆめ2っきver{}/ゆめ2っき", new_core_num));
                         if let Err(e) = copy_save_and_assets(&old_dir, &new_dir) {
-                            eprintln!("警告: 引き継ぎ処理中にエラーが発生しました: {}", e);
+                            t_eprintln!("Warning: Error occurred during inheritance process: {}", "警告: 引き継ぎ処理中にエラーが発生しました: {}", e);
                         }
                     }
                 }
@@ -2451,9 +2493,9 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
             let has_new_patch = ver_state.installed_patch.as_deref() != Some(patch.label.as_str());
             
             if has_new_patch {
-                println!("{} patch: {} にアップデート可能です (適用対象: {})",
+                t_println!("{} patch: Can be updated to {} (Applies to: {})", "{} patch: {} にアップデート可能です (適用対象: {})",
                     "!".yellow().bold(), patch.label.green().bold(), installed.yellow());
-                println!("アップデートを実行します...\n");
+                println!("{}", &rust_i18n::t!("executing_update"));
                 
                 state.active_core = Some(installed.clone());
                 save_state(&state)?;
@@ -2463,7 +2505,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
         }
 
         if !core_updated {
-            println!("{} すべて最新バージョンです (core: {}, patch: {})",
+            t_println!("{} All versions are up to date (core: {}, patch: {})", "{} すべて最新バージョンです (core: {}, patch: {})",
                 "✓".green().bold(),
                 installed.yellow(),
                 state.installed_versions.get(installed)
@@ -2471,15 +2513,15 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
                     .unwrap_or("なし").yellow()
             );
         } else {
-            println!("{} アップグレードが完了しました。", "✓".green().bold());
+            t_println!("{} Upgrade completed.", "{} アップグレードが完了しました。", "✓".green().bold());
         }
     } else {
-        println!("{}", "coreがインストールされていません。".dimmed());
-        println!("  インストール: {}", "2kkipm install core".cyan());
+        println!("{}", rust_i18n::t!("core_not_installed").dimmed());
+        t_println!("  Install: {}", "  インストール: {}", "2kkipm install core".cyan());
     }
 
     if !download && current_installed.is_none() {
-        println!("\n  {}", "DLリンク表示: 2kkipm upgrade --download".dimmed());
+        t_println!("\n  {}", "\n  {}", "DLリンク表示: 2kkipm upgrade --download".dimmed());
     }
     Ok(())
 }
@@ -2489,7 +2531,7 @@ fn download_patch_only(
     cleanup_target: &Arc<Mutex<CleanupTarget>>,
 ) -> Result<PathBuf> {
     let raw_url = entry.dl_url.as_deref()
-        .context("パッチのDLリンクが見つかりません。Wikiを直接確認してください。")?;
+        .context(t_fmt!("Patch DL link not found. Please check the Wiki directly.", "パッチのDLリンクが見つかりません。Wikiを直接確認してください。"))?;
 
     let tmp_path = safe_temp_dir()
         .join(format!("2kkipm-patch-{}.bin", entry.label));
@@ -2543,29 +2585,29 @@ fn download_patch_only(
     });
 
     let zip_path = if let Some(cached_path) = cached {
-        println!("  {} キャッシュされたパッチファイルを使用します: {}",
+        t_println!("  {} Using cached patch file: {}", "  {} キャッシュされたパッチファイルを使用します: {}",
             "✓".green().bold(), cached_path.display().to_string().dimmed());
         cached_path
     } else {
-        println!("  {} ダウンロード中: {}", "→".cyan(), raw_url.dimmed());
+        t_println!("  {} Downloading: {}", "  {} ダウンロード中: {}", "→".cyan(), raw_url.dimmed());
         match download_file(raw_url, Some(&hint_path)) {
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) {
                     return Err(anyhow::anyhow!("__interrupted__"));
                 }
                 if tmp_path.exists() { let _ = fs::remove_file(&tmp_path); }
-                eprintln!("\n{} パッチの自動ダウンロードに失敗しました:", "✗".red().bold());
-                eprintln!("  {}", e.to_string().dimmed());
-                println!("\n{}", "手動ダウンロード手順:".yellow().bold());
-                println!("  1. ブラウザで以下のURLを開く:");
+                t_eprintln!("\n{} Failed to auto-download patch:", "\n{} パッチの自動ダウンロードに失敗しました:", "✗".red().bold());
+                t_eprintln!("  {}", "  {}", e.to_string().dimmed());
+                t_println!("\n{}", "\n{}", "手動ダウンロード手順:".yellow().bold());
+                t_println!("  1. Open the following URL in browser:", "  1. ブラウザで以下のURLを開く:");
                 println!("       {}", raw_url.cyan().bold());
                 let tmp_dir = safe_temp_dir();
-                println!("  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
-                println!("  3. 再度インストーラーを実行する");
-                bail!("パッチの自動ダウンロード失敗: {}", e);
+                t_println!("  2. Place the downloaded file under {}", "  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
+                t_println!("  3. Run the installer again", "  3. 再度インストーラーを実行する");
+                t_bail!("Failed to auto-download patch: {}", "パッチの自動ダウンロード失敗: {}", e);
             }
             Ok(actual_path) => {
-                println!("  {} ダウンロード完了: {}",
+                t_println!("  {} Download completed: {}", "  {} ダウンロード完了: {}",
                     "✓".green().bold(),
                     actual_path.file_name().unwrap_or_default()
                         .to_string_lossy().yellow());
@@ -2577,7 +2619,7 @@ fn download_patch_only(
     let fsize = fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
     if fsize < 10 * 1024 {
         let _ = fs::remove_file(&zip_path);
-        bail!("ダウンロードされたパッチファイルが小さすぎます ({} bytes)。", fsize);
+        t_bail!("Downloaded patch file is too small ({} bytes).", "ダウンロードされたパッチファイルが小さすぎます ({} bytes)。", fsize);
     }
 
     Ok(zip_path)
@@ -2606,7 +2648,7 @@ fn extract_patch_only(
             }
             return Ok(());
         }
-        return Err(e).context("パッチアーカイブの展開に失敗しました");
+        return Err(e).context(t_fmt!("Failed to extract patch archive", "パッチアーカイブの展開に失敗しました"));
     }
 
     let core_dir = find_active_core_dir(install_dir, active_core);
@@ -2615,7 +2657,7 @@ fn extract_patch_only(
     }
 
     let _ = fs::remove_file(zip_path);
-    println!("  {} 展開と上書きが完了しました", "✓".green().bold());
+    t_println!("  {} Extraction and overwrite completed", "  {} 展開と上書きが完了しました", "✓".green().bold());
     println!();
     Ok(())
 }
@@ -2632,13 +2674,13 @@ fn apply_patch_internal(
 
 fn sync_package_list_if_empty(state: &mut State) -> Result<()> {
     if state.entries.is_empty() {
-        println!("{}", "パッケージリストが空です。自動で update を実行します...".yellow());
+        println!("{}", &rust_i18n::t!("package_list_empty_auto_update").yellow());
         let entries = fetch_updates(false)?;
         let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
         state.entries = entries;
         state.last_fetched = Some(now.clone());
         save_state(state)?;
-        println!("{} パッケージリストを更新しました ({})", "✓".green().bold(), now.dimmed());
+        t_println!("{} Updated package list ({})", "{} パッケージリストを更新しました ({})", "✓".green().bold(), now.dimmed());
     }
     Ok(())
 }
@@ -2663,14 +2705,14 @@ impl CleanupTarget {
                     );
                     return;
                 }
-                eprintln!("\n{} 中断されました。", "!".yellow().bold());
+                t_eprintln!("\n{} Interrupted.", "\n{} 中断されました。", "!".yellow().bold());
             }
             CleanupTarget::ExtractDiff { dir, before } => {
                 std::thread::sleep(std::time::Duration::from_millis(100));
                 
                 let removed = diff_new_top_level_entries(dir, before);
                 if removed.is_empty() {
-                    eprintln!("\n{} 中断されました。", "!".yellow().bold());
+                    t_eprintln!("\n{} Interrupted.", "\n{} 中断されました。", "!".yellow().bold());
                 } else {
                     let mut success_all = true;
                     for p in &removed {
@@ -2678,14 +2720,14 @@ impl CleanupTarget {
                             if let Err(e) = fs::remove_dir_all(p) {
                                 std::thread::sleep(std::time::Duration::from_millis(250));
                                 if fs::remove_dir_all(p).is_err() {
-                                    eprintln!("  {} ディレクトリの自動削除に失敗: {} (原因: {})", "!".red(), p.display(), e);
+                                    t_eprintln!("  {} Failed to auto-delete directory: {} (Reason: {})", "  {} ディレクトリの自動削除に失敗: {} (原因: {})", "!".red(), p.display(), e);
                                     success_all = false;
                                 }
                             }
                         } else if let Err(e) = fs::remove_file(p) {
                             std::thread::sleep(std::time::Duration::from_millis(250));
                             if fs::remove_file(p).is_err() {
-                                eprintln!("  {} ファイルの自動削除に失敗: {} (原因: {})", "!".red(), p.display(), e);
+                                t_eprintln!("  {} Failed to auto-delete file: {} (Reason: {})", "  {} ファイルの自動削除に失敗: {} (原因: {})", "!".red(), p.display(), e);
                                 success_all = false;
                             }
                         }
@@ -2699,7 +2741,7 @@ impl CleanupTarget {
                             eprintln!("    {}", p.display().to_string().dimmed());
                         }
                     } else {
-                        eprintln!("\n{} 中断されましたが、一部の差分エントリの自動削除に失敗しました。手動で確認してください。", "!".yellow().bold());
+                        t_eprintln!("\n{} Interrupted, but failed to auto-delete some diff entries. Please check manually.", "\n{} 中断されましたが、一部の差分エントリの自動削除に失敗しました。手動で確認してください。", "!".yellow().bold());
                     }
                 }
             }
@@ -2718,7 +2760,7 @@ fn cmd_install_core_version(
             p.canonicalize().unwrap_or(p)
         }
         None => {
-            println!("{}", "インストール先ディレクトリが設定されていません。".yellow());
+            println!("{}", &rust_i18n::t!("install_dir_not_set").yellow());
             prompt_install_dir(config)?
         }
     };
@@ -2733,7 +2775,7 @@ fn cmd_install_core_version(
         if let Some(e) = found {
             e.clone()
         } else {
-            println!("{}", format!("指定されたバージョン {} は最新の履歴にありません。過去ログを取得して再検索します...", target).yellow());
+            println!("{}", t_fmt!("Specified version {} not found in recent history. Fetching past logs to search again...", "指定されたバージョン {} は最新の履歴にありません。過去ログを取得して再検索します...", target).yellow());
             
             let entries = fetch_updates(true)?;
             let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -2743,22 +2785,22 @@ fn cmd_install_core_version(
             
             state.entries.iter()
                 .find(|e| e.kind == EntryKind::Core && (e.label == normalized_target || e.label == format!("ver{}", normalized_target) || e.label.contains(normalized_target)))
-                .context(format!("過去ログをスキャンしましたが、指定されたバージョン {} の core エントリが見つかりませんでした。", target))?
+                .context(t_fmt!("Scanned past logs, but core entry for specified version {} was not found.", "過去ログをスキャンしましたが、指定されたバージョン {} の core エントリが見つかりませんでした。", target))?
                 .clone()
         }
     } else {
         state.entries.iter()
             .find(|e| e.kind == EntryKind::Core)
-            .context("coreのエントリが見つかりません。Wikiの形式が変わった可能性があります。")?
+            .context(t_fmt!("Core entry not found. The Wiki format might have changed.", "coreのエントリが見つかりません。Wikiの形式が変わった可能性があります。"))?
             .clone()
     };
 
     let raw_url = entry.dl_url.as_deref()
-        .context("DLリンクが見つかりません。Wikiを直接確認してください。")?;
+        .context(t_fmt!("DL link not found. Please check the Wiki directly.", "DLリンクが見つかりません。Wikiを直接確認してください。"))?;
 
-    println!("{}", "core をインストールします".cyan().bold());
-    println!("  バージョン : {}", entry.label.yellow().bold());
-    println!("  展開先     : {}", install_dir.display().to_string().cyan());
+    println!("{}", rust_i18n::t!("installing_core").cyan().bold());
+    t_println!("  Version : {}", "  バージョン : {}", entry.label.yellow().bold());
+    t_println!("  Extract to : {}", "  展開先     : {}", install_dir.display().to_string().cyan());
     println!();
 
     let tmp_path = safe_temp_dir()
@@ -2781,7 +2823,7 @@ fn cmd_install_core_version(
         if let Ok(target) = cleanup_target_for_handler.lock() {
             target.cleanup();
         } else {
-            eprintln!("\n{} 中断されました。", "!".yellow().bold());
+            t_eprintln!("\n{} Interrupted.", "\n{} 中断されました。", "!".yellow().bold());
         }
         std::process::exit(130);
     });
@@ -2814,28 +2856,28 @@ fn cmd_install_core_version(
     });
 
     let zip_path = if let Some(cached_path) = cached {
-        println!("  {} キャッシュされたファイルを使用します: {}",
+        t_println!("  {} Using cached file: {}", "  {} キャッシュされたファイルを使用します: {}",
             "✓".green().bold(), cached_path.display().to_string().dimmed());
         cached_path
     } else {
-        println!("  {} ダウンロード中: {}", "→".cyan(), raw_url.dimmed());
+        t_println!("  {} Downloading: {}", "  {} ダウンロード中: {}", "→".cyan(), raw_url.dimmed());
         match download_file(raw_url, None) {
             Err(e) => {
                 if INTERRUPTED.load(Ordering::SeqCst) { return Ok(()); }
                 if tmp_path.exists() { let _ = fs::remove_file(&tmp_path); }
-                eprintln!("\n{} 自動ダウンロードに失敗しました:", "✗".red().bold());
-                eprintln!("  {}", e.to_string().dimmed());
-                println!("\n{}", "手動ダウンロード手順:".yellow().bold());
-                println!("  1. ブラウザで以下のURLを開く:");
+                t_eprintln!("\n{} Auto-download failed:", "\n{} 自動ダウンロードに失敗しました:", "✗".red().bold());
+                t_eprintln!("  {}", "  {}", e.to_string().dimmed());
+                t_println!("\n{}", "\n{}", "手動ダウンロード手順:".yellow().bold());
+                t_println!("  1. Open the following URL in browser:", "  1. ブラウザで以下のURLを開く:");
                 println!("       {}", raw_url.cyan().bold());
                 let tmp_dir = safe_temp_dir();
-                println!("  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
-                println!("     (ファイル名はそのまま、拡張子は .zip .7z なども可)");
-                println!("  3. 再度 `2kkipm install core` を実行する");
+                t_println!("  2. Place the downloaded file under {}", "  2. ダウンロードしたファイルを {} 以下に置く", tmp_dir.display());
+                t_println!("     (Keep filename as is, extensions like .zip, .7z are also allowed)", "     (ファイル名はそのまま、拡張子は .zip .7z なども可)");
+                t_println!("  3. Run `2kkipm install core` again", "  3. 再度 `2kkipm install core` を実行する");
                 return Ok(());
             }
             Ok(actual_path) => {
-                println!("  {} ダウンロード完了: {}",
+                t_println!("  {} Download completed: {}", "  {} ダウンロード完了: {}",
                     "✓".green().bold(),
                     actual_path.file_name().unwrap_or_default()
                         .to_string_lossy().yellow());
@@ -2847,7 +2889,7 @@ fn cmd_install_core_version(
     let fsize = fs::metadata(&zip_path).map(|m| m.len()).unwrap_or(0);
     if fsize < 1024 * 1024 {
         let _ = fs::remove_file(&zip_path);
-        bail!("ダウンロードされたファイルが小さすぎます ({} bytes)。", fsize);
+        t_bail!("Downloaded file is too small ({} bytes).", "ダウンロードされたファイルが小さすぎます ({} bytes)。", fsize);
     }
 
     // 関連するパッチの自動ダウンロードを先に行う
@@ -2879,7 +2921,7 @@ fn cmd_install_core_version(
                     if let Some(num) = extract_bundled_patch_number(p) {
                         if max_bundled_patch.map_or(true, |m| num > m) {
                             max_bundled_patch = Some(num);
-                            println!("  {} {} に同梱のパッチ上限を検出: パッチ {}", "→".cyan(), p.label.yellow(), num);
+                            t_println!("  {} Detected patch limit bundled in {}: Patch {}", "  {} {} に同梱のパッチ上限を検出: パッチ {}", "→".cyan(), p.label.yellow(), num);
                         }
                     }
                 }
@@ -2894,7 +2936,7 @@ fn cmd_install_core_version(
                     if let Some(cap) = re_patch_num.captures(&p.label) {
                         if let Ok(num) = cap[1].parse::<u32>() {
                             if num <= limit {
-                                println!("  {} {} は同梱されているためインストールをスキップします", "→".dimmed(), p.label.dimmed());
+                                t_println!("  {} {} is skipped because it is bundled", "  {} {} は同梱されているためインストールをスキップします", "→".dimmed(), p.label.dimmed());
                                 return false;
                             }
                         }
@@ -2904,7 +2946,7 @@ fn cmd_install_core_version(
             }
 
             if !patches_to_apply.is_empty() {
-                println!("\n{}", "coreに関連するパッチを先にすべてダウンロードします...".cyan().bold());
+                t_println!("\n{}", "\n{}", "coreに関連するパッチを先にすべてダウンロードします...".cyan().bold());
                 for patch in patches_to_apply.into_iter().rev() {
                     let patch_zip_path = download_patch_only(&patch, &cleanup_target)?;
                     downloaded_patches.push((patch, patch_zip_path));
@@ -2924,7 +2966,7 @@ fn cmd_install_core_version(
         };
     }
 
-    println!("\n{} core の展開を開始します...", "→".cyan());
+    t_println!("\n{} Starting extraction of core...", "\n{} core の展開を開始します...", "→".cyan());
     if let Err(e) = extract_archive(&zip_path, &install_dir) {
         if e.to_string().contains("__interrupted__") || INTERRUPTED.load(Ordering::SeqCst) {
             if let Ok(target) = cleanup_target.lock() {
@@ -2932,11 +2974,11 @@ fn cmd_install_core_version(
             }
             return Ok(());
         }
-        return Err(e).context("アーカイブ展開に失敗しました");
+        return Err(e).context(t_fmt!("Failed to extract archive", "アーカイブ展開に失敗しました"));
     }
 
     let _ = fs::remove_file(&zip_path);
-    println!("  {} 展開完了", "✓".green().bold());
+    t_println!("  {} Extraction completed", "  {} 展開完了", "✓".green().bold());
     println!();
 
     state.active_core = Some(entry.label.clone());
@@ -2954,19 +2996,19 @@ fn cmd_install_core_version(
     }
     save_state(state)?;
 
-    println!("{} core {} をインストールしました",
+    t_println!("{} Installed core {}", "{} core {} をインストールしました",
         "✓".green().bold(), entry.label.yellow().bold());
 
     if !downloaded_patches.is_empty() {
-        println!("\n{}", "coreに関連するアップデートパッチおよびそれ以前のパッチを順次適用します...".cyan().bold());
+        t_println!("\n{}", "\n{}", "coreに関連するアップデートパッチおよびそれ以前のパッチを順次適用します...".cyan().bold());
         let mut current_core_ver = entry.label.clone();
         for (patch, patch_zip_path) in downloaded_patches {
-            println!("{} patch {} を適用中...", "→".cyan(), patch.label.yellow().bold());
+            t_println!("{} Applying patch {}...", "{} patch {} を適用中...", "→".cyan(), patch.label.yellow().bold());
             extract_patch_only(&patch_zip_path, &install_dir, &cleanup_target, Some(&current_core_ver))?;
 
             let ver_state = state.installed_versions
                 .get_mut(&current_core_ver)
-                .context("バージョン状態が見つかりません")?;
+                .context(t_fmt!("Version state not found", "バージョン状態が見つかりません"))?;
             ver_state.installed_patch = Some(patch.label.clone());
             if !ver_state.install_history.contains(&patch.label) {
                 ver_state.install_history.push(patch.label.clone());
@@ -2991,7 +3033,7 @@ fn cmd_install_core_version(
                     }
                 }
             }
-            println!("{} patch {} を適用しました", "✓".green().bold(), patch.label.yellow().bold());
+            t_println!("{} Applied patch {}", "{} patch {} を適用しました", "✓".green().bold(), patch.label.yellow().bold());
         }
     }
 
@@ -3006,7 +3048,7 @@ fn find_patch_entry(entries: &[UpdateEntry], target_patch_version: Option<&str>)
             let patch_num = &cap[2];
 
             let core_idx = entries.iter().position(|e| e.kind == EntryKind::Core && e.label == core_ver)
-                .context(format!("指定された core バージョン '{}' が Wiki に見つかりません。", core_ver))?;
+                .context(t_fmt!("Specified core version '{}' not found in Wiki.", "指定された core バージョン '{}' が Wiki に見つかりません。", core_ver))?;
 
             let next_core_idx = entries[..core_idx].iter()
                 .rposition(|e| e.kind == EntryKind::Core);
@@ -3031,18 +3073,18 @@ fn find_patch_entry(entries: &[UpdateEntry], target_patch_version: Option<&str>)
                     e.label.contains(&format!("パッチ{}", patch_num_str)) || e.label == patch_num_str
                 })
                 .cloned()
-                .context(format!("core '{}' 向けのパッチ '{}' が見つかりません。", core_ver, target))
+                .context(t_fmt!("Patch '{}' for core '{}' not found.", "core '{}' 向けのパッチ '{}' が見つかりません。", core_ver, target))
         } else {
             entries.iter()
                 .find(|e| e.kind == EntryKind::Patch && (e.label == target || e.label.contains(target)))
                 .cloned()
-                .context(format!("指定されたパッチ '{}' が見つかりません。", target))
+                .context(t_fmt!("Specified patch '{}' not found.", "指定されたパッチ '{}' が見つかりません。", target))
         }
     } else {
         entries.iter()
             .find(|e| e.kind == EntryKind::Patch)
             .cloned()
-            .context("最新パッチのエントリが見つかりません。")
+            .context(t_fmt!("Latest patch entry not found.", "最新パッチのエントリが見つかりません。"))
     }
 }
 
@@ -3053,22 +3095,22 @@ fn cmd_install_patch(state: &mut State, config: &mut Config, target_patch_versio
             p.canonicalize().unwrap_or(p)
         }
         None => {
-            println!("{}", "インストール先ディレクトリが設定されていません。".yellow());
+            println!("{}", &rust_i18n::t!("install_dir_not_set").yellow());
             prompt_install_dir(config)?
         }
     };
 
     let active_core = state.active_core.clone()
-        .context("アクティブな core がありません。先に `2kkipm install core` で本体をインストールしてください。")?;
+        .context(rust_i18n::t!("active_core_not_found"))?;
 
     sync_package_list_if_empty(state)?;
 
     let entry = find_patch_entry(&state.entries, target_patch_version)?;
 
-    println!("{}", "patch をインストールします".cyan().bold());
-    println!("  バージョン : {}", entry.label.yellow().bold());
-    println!("  適用対象本体: {}", active_core.yellow().bold());
-    println!("  展開先     : {}", install_dir.display().to_string().cyan());
+    println!("{}", rust_i18n::t!("installing_patch").cyan().bold());
+    t_println!("  Version : {}", "  バージョン : {}", entry.label.yellow().bold());
+    t_println!("  Target core: {}", "  適用対象本体: {}", active_core.yellow().bold());
+    t_println!("  Extract to : {}", "  展開先     : {}", install_dir.display().to_string().cyan());
     println!();
 
     let tmp_path = safe_temp_dir()
@@ -3114,7 +3156,7 @@ fn cmd_install_patch(state: &mut State, config: &mut Config, target_patch_versio
         }
     }
 
-    println!("{} patch {} を適用しました", "✓".green().bold(), entry.label.yellow().bold());
+    t_println!("{} Applied patch {}", "{} patch {} を適用しました", "✓".green().bold(), entry.label.yellow().bold());
     Ok(())
 }
 
@@ -3132,7 +3174,7 @@ fn cmd_install(kind: &str) -> Result<()> {
             } else if k == "patch" {
                 return cmd_install_patch(&mut state, &mut config, Some(v));
             } else {
-                bail!("バージョン指定の形式が正しくありません。 (例: core@0.129b, patch@0.129b2)");
+                t_bail!("Invalid version specification format. (e.g., core@0.129b, patch@0.129b2)", "バージョン指定の形式が正しくありません。 (例: core@0.129b, patch@0.129b2)");
             }
         }
     }
@@ -3140,13 +3182,13 @@ fn cmd_install(kind: &str) -> Result<()> {
     match kind {
         "core"  => cmd_install_core_version(&mut state, &mut config, None),
         "patch" => cmd_install_patch(&mut state, &mut config, None),
-        other   => bail!("不明なkind: {}  (core / patch または core@バージョン / patch@バージョン を指定してください)", other),
+        other   => t_bail!("Unknown kind: {} (Specify core / patch or core@version / patch@version)", "不明なkind: {}  (core / patch または core@バージョン / patch@バージョン を指定してください)", other),
     }
 }
 
 fn cmd_list() -> Result<()> {
     let state = load_state();
-    println!("{}", "インストール済みのバージョン一覧".cyan().bold());
+    println!("{}", rust_i18n::t!("installed_versions_list").cyan().bold());
     println!("{}", "─".repeat(50).dimmed());
 
     if state.installed_versions.is_empty() {
@@ -3183,14 +3225,14 @@ fn cmd_list() -> Result<()> {
 fn cmd_show(count: Option<usize>) -> Result<()> {
     let state = load_state();
     if state.entries.is_empty() {
-        println!("{}", "更新情報がありません。先に `2kkipm update` を実行してください。".yellow());
+        println!("{}", &rust_i18n::t!("no_update_info").yellow());
         return Ok(());
     }
     if let Some(fetched) = &state.last_fetched {
-        println!("{} (最終取得: {})",
+        t_println!("{} (Last fetched: {})", "{} (最終取得: {})",
             "最近の更新一覧".cyan().bold(), fetched.dimmed());
     } else {
-        println!("{}", "最近の更新一覧".cyan().bold());
+        println!("{}", rust_i18n::t!("recent_updates_list").cyan().bold());
     }
     println!("{}", "─".repeat(60).dimmed());
     let display_count = count.unwrap_or_else(|| default_display_count(&state.entries));
@@ -3205,14 +3247,14 @@ fn cmd_config(install_dir: Option<String>) -> Result<()> {
         let abs_str = abs.to_string_lossy().to_string();
         config.install_dir = Some(abs_str.clone());
         save_config(&config)?;
-        println!("{} install_dir を設定しました: {}",
+        t_println!("{} Set install_dir: {}", "{} install_dir を設定しました: {}",
             "✓".green().bold(), abs_str.yellow());
     } else {
         println!("{}", "現在の設定".cyan().bold());
         println!("{}", "─".repeat(40).dimmed());
         println!("  install_dir : {}",
             config.install_dir.as_deref().unwrap_or("(未設定)").yellow());
-        println!("  設定ファイル: {}",
+        t_println!("  Config file: {}", "  設定ファイル: {}",
             config_path().display().to_string().dimmed());
         println!("\n  設定変更: {}", "2kkipm config --install-dir <パス>".cyan());
     }
@@ -3223,7 +3265,7 @@ fn cmd_clean() -> Result<()> {
     let path = state_path();
     if path.exists() {
         fs::remove_file(&path)?;
-        println!("{} 状態ファイルを削除しました", "✓".green().bold());
+        t_println!("{} Deleted state file", "{} 状態ファイルを削除しました", "✓".green().bold());
     } else {
         println!("{}", "削除するファイルがありません".dimmed());
     }
@@ -3235,7 +3277,7 @@ fn cmd_remove(version: &str) -> Result<()> {
     let config = load_config();
 
     if !state.installed_versions.contains_key(version) {
-        bail!("指定されたバージョン {} はインストールされていません。", version.yellow());
+        t_bail!("Specified version {} is not installed.", "指定されたバージョン {} はインストールされていません。", version.yellow());
     }
 
     if state.active_core.as_deref() == Some(version) {
@@ -3256,13 +3298,13 @@ fn cmd_remove(version: &str) -> Result<()> {
     let dir_name = format!("ゆめ2っきver{}", core_num);
     let target_dir = install_dir.join(&dir_name);
 
-    println!("バージョン {} を削除しています...", version.cyan().bold());
+    t_println!("Removing version {}...", "バージョン {} を削除しています...", version.cyan().bold());
     if target_dir.exists() && target_dir.is_dir() {
-        println!("  {} ディレクトリを削除中: {}", "→".cyan(), target_dir.display());
+        t_println!("  {} Deleting directory: {}", "  {} ディレクトリを削除中: {}", "→".cyan(), target_dir.display());
         fs::remove_dir_all(&target_dir)
             .with_context(|| format!("ディレクトリの削除に失敗しました: {}", target_dir.display()))?;
     } else {
-        println!("  {} ディレクトリは存在しませんでした: {}", "※".yellow(), target_dir.display());
+        t_println!("  {} Directory did not exist: {}", "  {} ディレクトリは存在しませんでした: {}", "※".yellow(), target_dir.display());
     }
 
     state.installed_versions.remove(version);
@@ -3274,7 +3316,7 @@ fn cmd_remove(version: &str) -> Result<()> {
 
     save_state(&state)?;
 
-    println!("{} バージョン {} を正常に削除しました。", "✓".green().bold(), version.green());
+    t_println!("{} Successfully removed version {}.", "{} バージョン {} を正常に削除しました。", "✓".green().bold(), version.green());
 
     Ok(())
 }
@@ -3284,6 +3326,13 @@ fn cmd_remove(version: &str) -> Result<()> {
 // ============================================================
 
 fn main() {
+    let locale = sys_locale::get_locale().unwrap_or_else(|| "en".to_string());
+    if locale.starts_with("ja") {
+        rust_i18n::set_locale("ja");
+    } else {
+        rust_i18n::set_locale("en");
+    }
+
     let cli = Cli::parse();
     let result = match &cli.command {
         Commands::Update  { count }       => cmd_update(*count),
@@ -3296,7 +3345,7 @@ fn main() {
         Commands::Remove  { version }     => cmd_remove(version),
     };
     if let Err(e) = result {
-        eprintln!("{} {}", "エラー:".red().bold(), e);
+        t_eprintln!("{} {}", "{} {}", "エラー:".red().bold(), e);
         std::process::exit(1);
     }
 }
