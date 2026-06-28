@@ -957,11 +957,16 @@ fn run_download_command(cmd: &str, args: &[&std::ffi::OsStr]) -> Result<bool> {
 }
 
 fn download_with_external(url: &str, dest: &std::path::Path) -> Result<bool> {
+    let wget_ua = format!("--user-agent={}", USER_AGENT);
+
     if command_exists("wget", "--version") {
         println!("  {} wget を使用してダウンロード中...", "→".cyan());
         let args: Vec<&std::ffi::OsStr> = vec![
             std::ffi::OsStr::new("-q"),
             std::ffi::OsStr::new("--show-progress"),
+            std::ffi::OsStr::new("--timeout=30"),
+            std::ffi::OsStr::new("--tries=3"),
+            std::ffi::OsStr::new(&wget_ua),
             std::ffi::OsStr::new("-O"),
             dest.as_os_str(),
             std::ffi::OsStr::new(url),
@@ -978,6 +983,10 @@ fn download_with_external(url: &str, dest: &std::path::Path) -> Result<bool> {
         println!("  {} curl を使用してダウンロード中...", "→".cyan());
         let args: Vec<&std::ffi::OsStr> = vec![
             std::ffi::OsStr::new("-L"),
+            std::ffi::OsStr::new("--connect-timeout"),
+            std::ffi::OsStr::new("30"),
+            std::ffi::OsStr::new("-A"),
+            std::ffi::OsStr::new(USER_AGENT),
             std::ffi::OsStr::new("-o"),
             dest.as_os_str(),
             std::ffi::OsStr::new(url),
@@ -2401,7 +2410,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
                 
                 state.active_core = Some(installed.clone());
                 save_state(&state)?;
-                cmd_install_patch(&mut state, &mut config)?;
+                cmd_install_patch(&mut state, &mut config, None)?;
                 return Ok(());
             }
         }
@@ -2942,7 +2951,41 @@ fn cmd_install_core_version(
     Ok(())
 }
 
-fn cmd_install_patch(state: &mut State, config: &mut Config) -> Result<()> {
+fn find_patch_entry(entries: &[UpdateEntry], target_patch_version: Option<&str>) -> Result<UpdateEntry> {
+    if let Some(target) = target_patch_version {
+        let re_patch = regex::Regex::new(r"^(\d+\.\d+[a-z]?)(\d+)$").unwrap();
+        if let Some(cap) = re_patch.captures(target) {
+            let core_ver = format!("ver{}", &cap[1]);
+            let patch_num = &cap[2];
+
+            let core_idx = entries.iter().position(|e| e.kind == EntryKind::Core && e.label == core_ver)
+                .context(format!("指定された core バージョン '{}' が Wiki に見つかりません。", core_ver))?;
+
+            let prev_core_idx = entries[core_idx + 1..].iter()
+                .position(|e| e.kind == EntryKind::Core)
+                .map(|pos| core_idx + 1 + pos)
+                .unwrap_or(entries.len());
+
+            let range_entries = &entries[core_idx + 1..prev_core_idx];
+            range_entries.iter()
+                .find(|e| e.kind == EntryKind::Patch && (e.label.contains(&format!("パッチ{}", patch_num)) || e.label.contains(patch_num)))
+                .cloned()
+                .context(format!("core '{}' 向けのパッチ '{}' が見つかりません。", core_ver, target))
+        } else {
+            entries.iter()
+                .find(|e| e.kind == EntryKind::Patch && (e.label == target || e.label.contains(target)))
+                .cloned()
+                .context(format!("指定されたパッチ '{}' が見つかりません。", target))
+        }
+    } else {
+        entries.iter()
+            .find(|e| e.kind == EntryKind::Patch)
+            .cloned()
+            .context("最新パッチのエントリが見つかりません。")
+    }
+}
+
+fn cmd_install_patch(state: &mut State, config: &mut Config, target_patch_version: Option<&str>) -> Result<()> {
     let install_dir = match &config.install_dir {
         Some(d) => {
             let p = PathBuf::from(d);
@@ -2959,10 +3002,7 @@ fn cmd_install_patch(state: &mut State, config: &mut Config) -> Result<()> {
 
     sync_package_list_if_empty(state)?;
 
-    let entry = state.entries.iter()
-        .find(|e| e.kind == EntryKind::Patch)
-        .context("最新パッチのエントリが見つかりません。")?
-        .clone();
+    let entry = find_patch_entry(&state.entries, target_patch_version)?;
 
     println!("{}", "patch をインストールします".cyan().bold());
     println!("  バージョン : {}", entry.label.yellow().bold());
@@ -3028,16 +3068,18 @@ fn cmd_install(kind: &str) -> Result<()> {
             let v = parts[1];
             if k == "core" {
                 return cmd_install_core_version(&mut state, &mut config, Some(v));
+            } else if k == "patch" {
+                return cmd_install_patch(&mut state, &mut config, Some(v));
             } else {
-                bail!("バージョン指定ができるのは core ののみです (例: core@0.129b)");
+                bail!("バージョン指定の形式が正しくありません。 (例: core@0.129b, patch@0.129b2)");
             }
         }
     }
 
     match kind {
         "core"  => cmd_install_core_version(&mut state, &mut config, None),
-        "patch" => cmd_install_patch(&mut state, &mut config),
-        other   => bail!("不明なkind: {}  (core / patch または core@バージョン を指定してください)", other),
+        "patch" => cmd_install_patch(&mut state, &mut config, None),
+        other   => bail!("不明なkind: {}  (core / patch または core@バージョン / patch@バージョン を指定してください)", other),
     }
 }
 
@@ -3465,5 +3507,82 @@ mod tests {
         assert!(!is_semver_older("0.1.0", "0.1.0"));
         assert!(is_semver_older("0.1.0", "0.1.0.1"));
         assert!(!is_semver_older("0.1.0.1", "0.1.0"));
+    }
+
+    #[test]
+    fn test_find_patch_entry() {
+        let entries = vec![
+            UpdateEntry {
+                kind: EntryKind::Core,
+                label: "ver0.129c".to_string(),
+                dl_url: None,
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Patch,
+                label: "パッチ11".to_string(),
+                dl_url: Some("url-c-11".to_string()),
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Core,
+                label: "ver0.129b".to_string(),
+                dl_url: None,
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Patch,
+                label: "パッチ2".to_string(),
+                dl_url: Some("url-b-2".to_string()),
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Patch,
+                label: "パッチ1".to_string(),
+                dl_url: Some("url-b-1".to_string()),
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Core,
+                label: "ver0.129a".to_string(),
+                dl_url: None,
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Patch,
+                label: "パッチ2".to_string(),
+                dl_url: Some("url-a-2".to_string()),
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+        ];
+
+        let res = find_patch_entry(&entries, Some("0.129b2")).unwrap();
+        assert_eq!(res.dl_url.as_deref(), Some("url-b-2"));
+
+        let res = find_patch_entry(&entries, Some("0.129a2")).unwrap();
+        assert_eq!(res.dl_url.as_deref(), Some("url-a-2"));
+
+        let res = find_patch_entry(&entries, Some("0.129b1")).unwrap();
+        assert_eq!(res.dl_url.as_deref(), Some("url-b-1"));
+
+        let res = find_patch_entry(&entries, None).unwrap();
+        assert_eq!(res.dl_url.as_deref(), Some("url-c-11"));
+
+        let res = find_patch_entry(&entries, Some("パッチ11")).unwrap();
+        assert_eq!(res.dl_url.as_deref(), Some("url-c-11"));
     }
 }
