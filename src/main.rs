@@ -55,7 +55,7 @@ fn safe_temp_dir() -> PathBuf {
 #[clap(
     name = "2kkipm",
     about = "ゆめ2っき パッケージマネージャー (非公式)",
-    version = "0.1.0"
+    version = "0.1.1"
 )]
 struct Cli {
     #[clap(subcommand)]
@@ -2023,8 +2023,8 @@ fn select_asset(assets: &[GithubAsset]) -> Option<String> {
     for asset in assets {
         let name = asset.name.to_lowercase();
         let os_match = match os {
-            "windows" => name.contains("windows") || name.contains("win") || name.ends_with(".exe"),
-            "linux" => name.contains("linux"),
+            "windows" => name.ends_with(".exe"),
+            "linux" => !name.ends_with(".exe"),
             "macos" => name.contains("macos") || name.contains("darwin") || name.contains("osx"),
             _ => false,
         };
@@ -2041,8 +2041,8 @@ fn select_asset(assets: &[GithubAsset]) -> Option<String> {
     for asset in assets {
         let name = asset.name.to_lowercase();
         let os_match = match os {
-            "windows" => name.contains("windows") || name.contains("win") || name.ends_with(".exe"),
-            "linux" => name.contains("linux"),
+            "windows" => name.ends_with(".exe"),
+            "linux" => !name.ends_with(".exe"),
             "macos" => name.contains("macos") || name.contains("darwin") || name.contains("osx"),
             _ => false,
         };
