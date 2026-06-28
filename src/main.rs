@@ -648,17 +648,20 @@ fn getuploader_download(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBu
     eprintln!("  {} 実ファイルURLを取得: {}", "✓".green(), dl_url.yellow());
 
     // 5. 実ファイルをダウンロード
-    let res3 = agent.get(&dl_url).set("User-Agent", USER_AGENT).call()?;
-    
-    let fname = filename_from_response(&res3).or_else(|| {
-        url::Url::parse(&dl_url).ok()
-            .and_then(|u| u.path_segments()?.last().map(|s| s.to_string()))
-    });
-
+    let fname = url::Url::parse(&dl_url).ok()
+        .and_then(|u| u.path_segments()?.last().map(|s| s.to_string()));
     let dest = resolve_dest(hint_dest, fname.as_deref(), "2kki-patch.zip");
-    stream_to_file(res3, &dest)?;
 
-    Ok(dest)
+    match download_with_external(&dl_url, &dest) {
+        Ok(true) => return Ok(dest),
+        _ => {}
+    }
+
+    let res3 = agent.get(&dl_url).set("User-Agent", USER_AGENT).call()?;
+    let final_fname = filename_from_response(&res3).or(fname);
+    let final_dest = resolve_dest(hint_dest, final_fname.as_deref(), "2kki-patch.zip");
+    stream_to_file(res3, &final_dest)?;
+    Ok(final_dest)
 }
 
 fn decode_html_entities(s: &str) -> String {
@@ -926,8 +929,68 @@ fn gdrive_download(file_id: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf
         eprintln!("  {} ファイル名: {}", "→".cyan(), f.yellow());
     }
     let dest = resolve_dest(hint_dest, fname.as_deref(), "2kki-download.bin");
+    match download_with_external(&dl_url, &dest) {
+        Ok(true) => return Ok(dest),
+        _ => {}
+    }
     stream_to_file(res2, &dest)?;
     Ok(dest)
+}
+
+fn run_download_command(cmd: &str, args: &[&std::ffi::OsStr]) -> Result<bool> {
+    let mut child = Command::new(cmd)
+        .args(args)
+        .spawn()?;
+    
+    let pid = child.id();
+    if let Ok(mut pid_guard) = child_pid_store().lock() {
+        *pid_guard = Some(pid);
+    }
+
+    let status = child.wait()?;
+
+    if let Ok(mut pid_guard) = child_pid_store().lock() {
+        *pid_guard = None;
+    }
+
+    Ok(status.success())
+}
+
+fn download_with_external(url: &str, dest: &std::path::Path) -> Result<bool> {
+    if command_exists("wget", "--version") {
+        println!("  {} wget を使用してダウンロード中...", "→".cyan());
+        let args: Vec<&std::ffi::OsStr> = vec![
+            std::ffi::OsStr::new("-q"),
+            std::ffi::OsStr::new("--show-progress"),
+            std::ffi::OsStr::new("-O"),
+            dest.as_os_str(),
+            std::ffi::OsStr::new(url),
+        ];
+        match run_download_command("wget", &args) {
+            Ok(true) => return Ok(true),
+            _ => {
+                println!("  {} wget でのダウンロードに失敗しました。フォールバックします...", "!".yellow().bold());
+            }
+        }
+    }
+
+    if command_exists("curl", "--version") {
+        println!("  {} curl を使用してダウンロード中...", "→".cyan());
+        let args: Vec<&std::ffi::OsStr> = vec![
+            std::ffi::OsStr::new("-L"),
+            std::ffi::OsStr::new("-o"),
+            dest.as_os_str(),
+            std::ffi::OsStr::new(url),
+        ];
+        match run_download_command("curl", &args) {
+            Ok(true) => return Ok(true),
+            _ => {
+                println!("  {} curl でのダウンロードに失敗しました。フォールバックします...", "!".yellow().bold());
+            }
+        }
+    }
+
+    Ok(false)
 }
 
 // ============================================================
@@ -941,6 +1004,15 @@ fn download_file(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf> {
     if let Some(file_id) = extract_gdrive_id(url) {
         return gdrive_download(&file_id, hint_dest);
     }
+
+    let fname = url.split('/').last().filter(|s| looks_like_filename(s));
+    let dest = resolve_dest(hint_dest, fname, "download.bin");
+
+    match download_with_external(url, &dest) {
+        Ok(true) => return Ok(dest),
+        _ => {}
+    }
+
     let agent = ureq::AgentBuilder::new().redirects(10).build();
     let res = agent
         .get(url)
@@ -948,9 +1020,9 @@ fn download_file(url: &str, hint_dest: Option<&PathBuf>) -> Result<PathBuf> {
         .timeout(std::time::Duration::from_secs(3600))
         .call()
         .with_context(|| format!("ダウンロードに失敗しました: {}", url))?;
-    let dest = resolve_dest(hint_dest, filename_from_response(&res).as_deref(), "download.bin");
-    stream_to_file(res, &dest)?;
-    Ok(dest)
+    let final_dest = resolve_dest(hint_dest, filename_from_response(&res).as_deref(), "download.bin");
+    stream_to_file(res, &final_dest)?;
+    Ok(final_dest)
 }
 
 fn resolve_dest(hint_dest: Option<&PathBuf>, fname: Option<&str>, fallback: &str) -> PathBuf {
@@ -2206,27 +2278,30 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
         std::env::current_dir()?
     };
 
-    let latest_installed_ver = if state.installed_versions.is_empty() {
-        None
-    } else {
-        let mut keys: Vec<&String> = state.installed_versions.keys().collect();
-        keys.sort_by(|a, b| {
-            if is_version_older(a, b) {
-                std::cmp::Ordering::Greater
-            } else if is_version_older(b, a) {
-                std::cmp::Ordering::Less
-            } else {
-                std::cmp::Ordering::Equal
-            }
-        });
-        Some(keys[0].clone())
+    let get_latest_installed = |state: &State| -> Option<String> {
+        if state.installed_versions.is_empty() {
+            None
+        } else {
+            let mut keys: Vec<&String> = state.installed_versions.keys().collect();
+            keys.sort_by(|a, b| {
+                if is_version_older(a, b) {
+                    std::cmp::Ordering::Greater
+                } else if is_version_older(b, a) {
+                    std::cmp::Ordering::Less
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            });
+            Some(keys[0].clone())
+        }
     };
 
-    let latest_core  = state.entries.iter().find(|e| e.kind == EntryKind::Core);
-    let latest_patch = state.entries.iter().find(|e| e.kind == EntryKind::Patch);
+    let mut current_installed = get_latest_installed(&state);
+    let latest_core = state.entries.iter().find(|e| e.kind == EntryKind::Core).cloned();
+    let latest_patch = state.entries.iter().find(|e| e.kind == EntryKind::Patch).cloned();
 
-    let mut display_core_ver = latest_core.map(|e| e.label.clone());
-    if let Some(core_entry) = latest_core {
+    let mut display_core_ver = latest_core.as_ref().map(|e| e.label.clone());
+    if let Some(core_entry) = &latest_core {
         let core_idx = state.entries.iter().position(|e| e.label == core_entry.label && e.kind == EntryKind::Core);
         if let Some(c_idx) = core_idx {
             let next_core_idx = state.entries[..c_idx].iter()
@@ -2254,7 +2329,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
     println!("{}", "─".repeat(50).dimmed());
 
     if let Some(core_ver) = &display_core_ver {
-        if let Some(entry) = latest_core {
+        if let Some(entry) = &latest_core {
             println!("{} {} {}  （{}）",
                 "●".green(), "core  ".bold(), core_ver.yellow().bold(), entry.date.dimmed());
             if !entry.authors.is_empty() {
@@ -2266,7 +2341,7 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
         }
     }
 
-    if let Some(entry) = latest_patch {
+    if let Some(entry) = &latest_patch {
         println!("{} {} {}  （{}）",
             "○".blue(), "patch ".bold(), entry.label.yellow(), entry.date.dimmed());
         if !entry.authors.is_empty() {
@@ -2282,8 +2357,10 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
 
     println!("{}", "─".repeat(50).dimmed());
 
-    if let Some(installed) = &latest_installed_ver {
-        if let Some(core_entry) = latest_core {
+    let mut core_updated = false;
+
+    if let Some(installed) = &current_installed {
+        if let Some(core_entry) = &latest_core {
             if is_version_older(installed, &core_entry.label) {
                 println!("{} core: {} → {} にアップデート可能です",
                     "!".yellow().bold(), installed.dimmed(), core_entry.label.green().bold());
@@ -2304,11 +2381,16 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
                         }
                     }
                 }
-                return Ok(());
+                
+                state = load_state();
+                current_installed = get_latest_installed(&state);
+                core_updated = true;
             }
         }
+    }
 
-        if let Some(patch) = latest_patch {
+    if let Some(installed) = &current_installed {
+        if let Some(patch) = &latest_patch {
             let ver_state = state.installed_versions.get(installed).unwrap();
             let has_new_patch = ver_state.installed_patch.as_deref() != Some(patch.label.as_str());
             
@@ -2319,23 +2401,28 @@ fn cmd_upgrade(download: bool, self_update: bool) -> Result<()> {
                 
                 state.active_core = Some(installed.clone());
                 save_state(&state)?;
-                return cmd_install_patch(&mut state, &mut config);
+                cmd_install_patch(&mut state, &mut config)?;
+                return Ok(());
             }
         }
 
-        println!("{} すべて最新バージョンです (core: {}, patch: {})",
-            "✓".green().bold(),
-            installed.yellow(),
-            state.installed_versions.get(installed)
-                .and_then(|s| s.installed_patch.as_deref())
-                .unwrap_or("なし").yellow()
-        );
+        if !core_updated {
+            println!("{} すべて最新バージョンです (core: {}, patch: {})",
+                "✓".green().bold(),
+                installed.yellow(),
+                state.installed_versions.get(installed)
+                    .and_then(|s| s.installed_patch.as_deref())
+                    .unwrap_or("なし").yellow()
+            );
+        } else {
+            println!("{} アップグレードが完了しました。", "✓".green().bold());
+        }
     } else {
         println!("{}", "coreがインストールされていません。".dimmed());
         println!("  インストール: {}", "2kkipm install core".cyan());
     }
 
-    if !download && latest_installed_ver.is_none() {
+    if !download && current_installed.is_none() {
         println!("\n  {}", "DLリンク表示: 2kkipm upgrade --download".dimmed());
     }
     Ok(())
@@ -2725,21 +2812,10 @@ fn cmd_install_core_version(
             // この範囲内からパッチを抽出する
             let range_entries = &state.entries[start_range..c_idx];
             
-            // この範囲の中の、最も新しい「アップデートパッチ」の位置を探す
-            let up_idx = range_entries.iter()
-                .position(|e| e.kind == EntryKind::Patch && e.label.contains("アップデートパッチ"));
-
-            let mut patches_to_apply: Vec<UpdateEntry> = if let Some(u_idx) = up_idx {
-                range_entries[u_idx..].iter()
-                    .filter(|e| e.kind == EntryKind::Patch)
-                    .cloned()
-                    .collect()
-            } else {
-                range_entries.iter()
-                    .filter(|e| e.kind == EntryKind::Patch)
-                    .cloned()
-                    .collect()
-            };
+            let mut patches_to_apply: Vec<UpdateEntry> = range_entries.iter()
+                .filter(|e| e.kind == EntryKind::Patch)
+                .cloned()
+                .collect();
 
             let mut max_bundled_patch: Option<u32> = None;
             for p in &patches_to_apply {
