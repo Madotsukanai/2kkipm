@@ -106,7 +106,7 @@ fn safe_temp_dir() -> PathBuf {
 #[clap(
     name = "2kkipm",
     about = "ゆめ2っき パッケージマネージャー (非公式) / Yume2kki Package Manager (Unofficial)",
-    version = "0.1.4"
+    version = "0.1.5"
 )]
 struct Cli {
     #[clap(subcommand)]
@@ -2207,9 +2207,18 @@ fn perform_self_update(download_url: &str, tag_name: &str) -> Result<()> {
     #[cfg(not(windows))]
     {
         if let Err(_) = fs::rename(&bin_path, &current_exe) {
+            let _ = fs::remove_file(&current_exe);
             if let Err(e) = fs::copy(&bin_path, &current_exe) {
                 if e.kind() == std::io::ErrorKind::PermissionDenied {
                     t_println!("  {} Insufficient permissions. Attempting replacement using sudo...", "  {} 権限が不足しています。sudoを使用して置き換えを試みます...", "!".yellow());
+                    
+                    // Remove the current executable first to avoid "Text file busy" error
+                    let _ = std::process::Command::new("sudo")
+                        .arg("rm")
+                        .arg("-f")
+                        .arg(&current_exe)
+                        .status();
+
                     let status = std::process::Command::new("sudo")
                         .arg("cp")
                         .arg(&bin_path)
