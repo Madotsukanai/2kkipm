@@ -2961,14 +2961,28 @@ fn find_patch_entry(entries: &[UpdateEntry], target_patch_version: Option<&str>)
             let core_idx = entries.iter().position(|e| e.kind == EntryKind::Core && e.label == core_ver)
                 .context(format!("指定された core バージョン '{}' が Wiki に見つかりません。", core_ver))?;
 
-            let prev_core_idx = entries[core_idx + 1..].iter()
-                .position(|e| e.kind == EntryKind::Core)
-                .map(|pos| core_idx + 1 + pos)
-                .unwrap_or(entries.len());
+            let next_core_idx = entries[..core_idx].iter()
+                .rposition(|e| e.kind == EntryKind::Core);
 
-            let range_entries = &entries[core_idx + 1..prev_core_idx];
+            let start_range = match next_core_idx {
+                Some(idx) => idx + 1,
+                None => 0,
+            };
+
+            let range_entries = &entries[start_range..core_idx];
+            let patch_num_str = patch_num.to_string();
+            let re_label_patch = regex::Regex::new(r"パッチ\s*(\d+)").unwrap();
+
             range_entries.iter()
-                .find(|e| e.kind == EntryKind::Patch && (e.label.contains(&format!("パッチ{}", patch_num)) || e.label.contains(patch_num)))
+                .find(|e| {
+                    if e.kind != EntryKind::Patch {
+                        return false;
+                    }
+                    if let Some(c) = re_label_patch.captures(&e.label) {
+                        return c[1] == patch_num_str;
+                    }
+                    e.label.contains(&format!("パッチ{}", patch_num_str)) || e.label == patch_num_str
+                })
                 .cloned()
                 .context(format!("core '{}' 向けのパッチ '{}' が見つかりません。", core_ver, target))
         } else {
@@ -3513,14 +3527,6 @@ mod tests {
     fn test_find_patch_entry() {
         let entries = vec![
             UpdateEntry {
-                kind: EntryKind::Core,
-                label: "ver0.129c".to_string(),
-                dl_url: None,
-                date: "".to_string(),
-                authors: vec![],
-                note: None,
-            },
-            UpdateEntry {
                 kind: EntryKind::Patch,
                 label: "パッチ11".to_string(),
                 dl_url: Some("url-c-11".to_string()),
@@ -3530,7 +3536,7 @@ mod tests {
             },
             UpdateEntry {
                 kind: EntryKind::Core,
-                label: "ver0.129b".to_string(),
+                label: "ver0.129c".to_string(),
                 dl_url: None,
                 date: "".to_string(),
                 authors: vec![],
@@ -3554,7 +3560,7 @@ mod tests {
             },
             UpdateEntry {
                 kind: EntryKind::Core,
-                label: "ver0.129a".to_string(),
+                label: "ver0.129b".to_string(),
                 dl_url: None,
                 date: "".to_string(),
                 authors: vec![],
@@ -3564,6 +3570,14 @@ mod tests {
                 kind: EntryKind::Patch,
                 label: "パッチ2".to_string(),
                 dl_url: Some("url-a-2".to_string()),
+                date: "".to_string(),
+                authors: vec![],
+                note: None,
+            },
+            UpdateEntry {
+                kind: EntryKind::Core,
+                label: "ver0.129a".to_string(),
+                dl_url: None,
                 date: "".to_string(),
                 authors: vec![],
                 note: None,
